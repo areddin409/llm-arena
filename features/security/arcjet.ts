@@ -68,6 +68,25 @@ export const arcjetChat = arcjet({
 /** One model call spends one token. */
 export const CHAT_TOKENS_PER_CALL = 1;
 
+/**
+ * For `/api/turns` and `/api/votes` — the database writes that bracket a prompt.
+ *
+ * Shield and bot detection, and deliberately **no token bucket**. The bucket
+ * above is sized in model calls, because that is what actually costs money and
+ * what feature 6 wrote down as the limit. Charging a turn or a vote against that
+ * same bucket would quietly change what the number means: thirty would stop
+ * being ten three-model prompts and become something nobody could state. These
+ * two routes write rows and call nobody, so they get the free protections and
+ * are bounded in practice by the chat bucket standing between them.
+ */
+export const arcjetWrite = arcjet({
+  key: env.ARCJET_KEY,
+  rules: [
+    shield({ mode: "LIVE" }),
+    detectBot({ mode: "LIVE", allow: ["CURL", "POSTMAN"] }),
+  ],
+});
+
 export type Refusal = {
   readonly sentence: string;
   readonly status: number;

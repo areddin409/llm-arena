@@ -8,11 +8,11 @@
 //   2. The datasource block carries no `url`. Connection strings moved to
 //      prisma.config.ts in v7, which is also where .env.local gets loaded.
 //
-// There are deliberately no models yet. The data model — users tied to Clerk,
-// threads, per-model messages, votes, and how a turn gets created when one
-// prompt is three parallel POSTs — is feature 3 in docs/scope.md and has an
-// open "Decide the approach" step. This file is the plumbing that decision
-// will land into.
+// The shape below is feature 3 in docs/scope.md, which carries the full
+// reasoning. The short version: User -> Thread -> Turn -> ModelResponse, with
+// Vote hanging off a Turn. One prompt is one Turn and three parallel POSTs to
+// /api/chat, so the rows those calls write into are created up front, in one
+// transaction, rather than raced for.
 
 generator client {
   provider = "prisma-client"
@@ -21,4 +21,166 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+}
+
+/// PENDING when a turn is created. A streaming call reserves the row by moving
+/// it to STREAMING, then finishes it as COMPLETE or FAILED.
+///
+/// STREAMING exists for concurrency, not for the UI — in-flight state in the
+/// browser is still the browser's business. It is the reservation that stops two
+/// overlapping requests for the same row from both calling the provider and both
+/// writing an answer. The move into it is a conditional update, so exactly one
+/// caller can win it.
+///
+/// FAILED is not terminal: a model that failed on a transient provider error can
+/// be retried, which moves the row back to STREAMING. COMPLETE *is* terminal, and
+/// that is the part the vote rule leans on. The "a vote needs two or more
+/// answers" check counts COMPLETE rows in application code, and it is safe there
+/// because nothing ever leaves COMPLETE — so the count can only rise, never fall.
+enum ResponseStatus {
+  PENDING
+  STREAMING
+  COMPLETE
+  FAILED
+}
+
+/// Clerk remains the source of truth for who someone is. This table exists so
+/// threads and votes have real referential integrity, and holds nothing Clerk
+/// already holds. Rows are created lazily — upserted inside the same
+/// transaction as the first thread or vote a person writes — rather than synced
+/// from a Clerk webhook, which would need signature verification, a backfill,
+/// and would still race a thread write that arrives before user.created does.
+model User {
+  id          String   @id @default(cuid())
+  clerkUserId String   @unique
+  createdAt   DateTime @default(now())
+
+  threads Thread[]
+  votes   Vote[]
+}
+
+/// One conversation. Public to read by link (feature 8), so there is
+/// deliberately no visibility flag; only writing to it requires being the owner.
+model Thread {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  turns Turn[]
+
+  /// The sidebar's query in feature 7: one user's threads, newest first.
+  @@index([userId, createdAt(sort: Desc)])
+}
+
+/// One prompt sent to every selected model at once. The prompt lives here as a
+/// field rather than as a message row with a role, because every model in a
+/// turn answers the same text — storing it once is what makes "two or more
+/// models answered this" a countable thing rather than a join to reason about.
+///
+/// A single model's own conversation (feature 6's follow-ups) is this thread's
+/// turns in `index` order, each turn's prompt paired with that model's
+/// response. A model that failed a turn simply contributes nothing to its own
+/// history.
+model Turn {
+  id        String   @id @default(cuid())
+  threadId  String
+  index     Int
+  prompt    String
+  createdAt DateTime @default(now())
+
+  thread    Thread          @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  responses ModelResponse[]
+  votes     Vote[]
+
+  @@unique([threadId, index])
+}
+
+/// One model's answer to one turn, plus the honestly measured numbers behind
+/// it. Created PENDING by the turn-creation transaction so the three parallel
+/// /api/chat calls each update a row that already exists.
+///
+/// No column stores a provider's error text. A failed call is FAILED here and
+/// the real exception goes to the server log — keeping it out of a table the UI
+/// reads is how it stays out of the UI.
+model ModelResponse {
+  id        String         @id @default(cuid())
+  turnId    String
+  /// author/slug:free. The stable key, and what the leaderboard groups by.
+  modelId   String
+  /// Display name as it stood when this call was made. A snapshot, not a source
+  /// of truth: feature 5's catalog is live, and a model that gets renamed or
+  /// drops off the free tier would otherwise leave old rows with nothing to
+  /// call themselves. The leaderboard groups by modelId and takes the most
+  /// recent name it saw for that id.
+  modelName String
+  status    ResponseStatus @default(PENDING)
+  content   String         @default("")
+
+  timeToFirstTokenMs Int?
+  tokensPerSecond    Float?
+  inputTokens        Int?
+  outputTokens       Int?
+  /// Not reliably inputTokens + outputTokens. Reasoning and cached-input tokens
+  /// land in a provider's total differently, and that same seam is what made
+  /// tokens/sec read in the thousands before feature 1 corrected it. Recorded
+  /// as reported rather than recomputed.
+  totalTokens        Int?
+  totalMs            Int?
+  /// Always 0.0000 here — every model in this arena is free tier. Stored anyway
+  /// because it is a real measured number, and because a cost with no input
+  /// token count beside it could never be audited.
+  costUsd            Decimal @default(0) @db.Decimal(12, 6)
+
+  createdAt DateTime @default(now())
+  /// Set when a call reserves this row, and doubles as the reservation's
+  /// identity: a terminal write only lands if this is still the exact timestamp
+  /// that caller set, so a request whose lease was reclaimed as stale cannot
+  /// come back and overwrite whoever took over. Also what makes a reservation
+  /// expirable — a stream killed mid-flight would otherwise lock the row into
+  /// STREAMING forever, with no way to retry it.
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  turn  Turn   @relation(fields: [turnId], references: [id], onDelete: Cascade)
+  votes Vote[]
+
+  /// A model answers a given turn once.
+  @@unique([turnId, modelId])
+  /// Exists purely to be the composite foreign-key target on Vote below, which
+  /// is what stops a vote pointing at a response from a different turn.
+  @@unique([id, turnId])
+  /// The leaderboard's read path: completed responses for one model.
+  @@index([modelId, status])
+}
+
+/// One person's pick of the best answer in a turn.
+///
+/// Two halves of the rule live in two places, on purpose. The database enforces
+/// what it can express declaratively: one vote per person per turn, and a
+/// winner that genuinely belongs to the turn being voted on (the composite
+/// foreign key). The "two or more models actually answered" half is enforced in
+/// the application, inside the same transaction as the insert — Postgres cannot
+/// express a count over a related table in a CHECK without a trigger or a
+/// denormalized counter, and neither buys anything real when the only writer is
+/// one route in this app. That check is safe outside the database because
+/// ResponseStatus only moves one way: the count can rise between check and
+/// write, never fall, so the failure direction is refusing a vote a few
+/// milliseconds early, not admitting an invalid one.
+model Vote {
+  id              String   @id @default(cuid())
+  turnId          String
+  modelResponseId String
+  userId          String
+  createdAt       DateTime @default(now())
+
+  turn   Turn          @relation(fields: [turnId], references: [id], onDelete: Cascade)
+  user   User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  winner ModelResponse @relation(fields: [modelResponseId, turnId], references: [id, turnId], onDelete: Cascade)
+
+  @@unique([turnId, userId])
+  /// The personal leaderboard's read path.
+  @@index([userId])
 }

@@ -92,6 +92,7 @@ export const createCallTimer = (now: () => number = Date.now): CallTimer => {
   const startedAt = now();
   let firstTokenAt: number | null = null;
   let contentChunks = 0;
+  let final: CallMetrics | null = null;
 
   return {
     markContentChunk: () => {
@@ -100,10 +101,24 @@ export const createCallTimer = (now: () => number = Date.now): CallTimer => {
       }
       contentChunks += 1;
     },
-    read: (outputTokens) =>
-      computeCallMetrics(
+    /**
+     * The first read stops the clock for good; later reads get that same answer
+     * back.
+     *
+     * A call is now read twice — once to put the numbers on the stream's finish
+     * frame, once to write them to the response row — and those two happen
+     * milliseconds apart. Without this the browser and the database disagreed
+     * about the same call: 179.8 tokens/sec on screen against 179.6 stored, off
+     * the same request. Neither number was wrong, which is what made it
+     * insidious; a stopwatch simply has to have one final answer.
+     */
+    read: (outputTokens) => {
+      final ??= computeCallMetrics(
         { startedAt, firstTokenAt, finishedAt: now(), contentChunks },
         outputTokens,
-      ),
+      );
+
+      return final;
+    },
   };
 };

@@ -20,7 +20,7 @@ There are rough hand-drawn sketches for the arena screen, the leaderboard, and t
 | --- | ------------------------------------------- | ---------- | ----------- |
 | 1   | Connecting to a model                       | Foundation | done        |
 | 2   | Coding standards & tooling                  | Foundation | done        |
-| 3   | Data model                                  | Foundation | in progress |
+| 3   | Data model                                  | Foundation | done        |
 | 4   | Design & look                               | Foundation | not started |
 | 5   | Model picker                                | Slice 1    | not started |
 | 6   | Send a prompt, parallel streams, and voting | Slice 1    | not started |
@@ -264,8 +264,400 @@ first is preferred — it keeps concurrency handling out of the hot path — but
 is a data-model decision, so it gets made here.
 
 - [x] Prisma connected and proven against the real database (see below)
-- [ ] Decide the approach
-- [ ] Build it
+- [x] Decide the approach
+- [x] Write the schema and run the first migration, proven against the live database
+- [x] Build the write paths: `POST /api/turns`, `POST /api/votes`, and persistence
+      inside `/api/chat`
+- [x] Add all three routes to the Postman collection, happy path and failures
+
+#### What was decided
+
+The shape is `User → Thread → Turn → ModelResponse`, with `Vote` hanging off a
+`Turn`. Five models and one enum, in `prisma/schema.prisma`, which carries the
+same reasoning inline as doc comments so it is readable next to the fields it
+explains.
+
+**A turn holds its prompt as a field; there is no message table with a role
+column.** Every model in a turn answers the same text, so storing it once is
+what makes "two or more models answered this" a countable thing rather than a
+join to reason about. One model's own conversation, which feature 6's follow-ups
+need, is the thread's turns in `index` order, each turn's prompt paired with that
+model's response. A model that failed a turn contributes nothing to its own
+history, which is the right behaviour and falls out of the shape for free rather
+than needing a rule.
+
+**The turn-creation race from feature 1 is solved by creating everything up
+front.** A new `POST /api/turns` creates the thread if it is new, the turn, and
+one `PENDING` `ModelResponse` per selected model — all in one transaction — and
+returns the ids. The three parallel `/api/chat` calls each carry their own
+`modelResponseId` and only ever update that one row. Nothing races because
+nothing concurrent creates anything. The alternative parked in feature 1,
+resolving a client-generated turn id idempotently across three calls, would have
+put concurrency handling in the hot streaming path to save one round trip.
+
+**The vote rule is enforced in two places, deliberately.** The database holds
+what it can express declaratively: `@@unique([turnId, userId])` for one vote per
+person per turn, and a composite foreign key from `Vote(modelResponseId, turnId)`
+to `ModelResponse(id, turnId)` so a vote cannot point at a response from a
+different turn. That second one needs `@@unique([id, turnId])` on
+`ModelResponse`, which exists for no other purpose.
+
+The "two or more models actually answered" half stays in application code, inside
+the same transaction as the insert. Postgres cannot express a count over a
+related table in a `CHECK`, so the database-side options were a `BEFORE INSERT`
+trigger — raw SQL that Prisma does not model, invisible in the schema file, easy
+to lose on a reset — or a denormalized counter on `Turn` with a generated
+`votable` column and a composite key hung off it, which is fully declarative and
+still bottoms out on the app maintaining the counter. That moves the trust
+rather than removing it, and buys nothing when the only writer is one route in
+this app.
+
+The check is safe outside the database for a specific reason worth not
+rediscovering: `ResponseStatus` only moves one way. A response goes
+`PENDING → COMPLETE` or `PENDING → FAILED` once and never back, so the count of
+completed responses rises and never falls. The usual check-then-write hazard
+therefore cannot bite in the dangerous direction — the worst case is refusing a
+vote a few milliseconds before the second answer lands, on a turn whose UI has
+not rendered a second answer yet either.
+
+**No Clerk webhook; `User` rows are upserted lazily.** Clerk stays the source of
+truth for who someone is and the table holds nothing Clerk already holds — it
+exists so threads and votes have real referential integrity and the personal
+leaderboard is a join rather than a string filter. `upsertUser(clerkUserId)` runs
+as the first statement inside the `POST /api/turns` and `POST /api/votes`
+transactions, never as its own round trip, so a failed turn cannot leave an
+orphan user behind. A webhook would have needed signature verification, a
+backfill for anyone who signed up first, and would still race a thread write that
+arrives before `user.created` does. The table is shaped so a webhook can be added
+later to fill in a display name without a migration that touches foreign keys.
+
+**`modelId` and `modelName` are both stored, and they are different kinds of
+thing.** `modelId` is the stable `author/slug:free` key and is what the
+leaderboard groups by. `modelName` is a snapshot of the display name as it stood
+when that call was made, because feature 5's catalog is live: a model that gets
+renamed, or drops off the free tier, would otherwise leave a months-old thread
+and a leaderboard row with nothing to call themselves. The leaderboard groups by
+`modelId` and takes the most recent name it saw for that id. The name is
+caller-supplied, only ever displayed, and never trusted for logic — which is why
+`POST /api/turns` will take `models: [{ id, name }]` rather than a bare list of
+ids, with `id` still validated against `freeModelIdSchema`.
+
+**Token accounting stores input, output, and total separately.** Total is not
+reliably input plus output — reasoning and cached-input tokens land in a
+provider's total differently, and that is the same seam that made tokens/sec read
+in the thousands before feature 1 corrected it. All three are recorded as
+reported rather than recomputed. `costUsd` is `Decimal(12,6)`, always reads
+`0.000000` because every model here is free tier, and is stored anyway because it
+is a real measured number; a cost with no input token count beside it could never
+be audited.
+
+**No column stores a provider's error text.** A failed call is `FAILED` and the
+real exception goes to the server log. Keeping it out of a table the UI reads is
+how it stays out of the UI. `STREAMING` is likewise not a status — that state
+lives in the browser and never needs to survive a refresh.
+
+**No visibility flag on `Thread`.** Feature 8 makes every thread readable by
+link; only writing to one requires being the owner, which is an ownership check
+in a route, not a column.
+
+#### The write paths
+
+Three routes, and one shared preamble. `POST /api/turns` creates the thread (if
+new), the turn, and one PENDING `ModelResponse` per model in a single
+transaction; `POST /api/chat` claims one of those rows and fills it in;
+`POST /api/votes` runs the ≥2 check and writes the vote. Domain logic lives in
+`features/turns/`, `features/votes/`, `features/chat/persist-response.ts` and
+`features/users/upsert-user.ts` as functions returning a discriminated result;
+the route handlers only map those results onto a status and a sentence.
+
+**`features/security/guard.ts` exists because three routes now share the same
+three steps** — require a Clerk session, ask Arcjet, hand back a trusted user id.
+Copy-pasting that into a third handler is how one of them eventually stops
+agreeing with the others. The order inside it is deliberate: Clerk first so an
+anonymous caller costs nothing and never reaches a rule, Arcjet before the body
+is read, and the user id resolved server-side so a per-user limit cannot be
+sidestepped with a header. `features/http/plain-response.ts` does the same job
+for the refusal shape.
+
+**`/api/chat` no longer accepts a model id, and that is a security fix, not a
+tidy-up.** The request now names a `modelResponseId` and the server reads the
+model back off that row. The old shape let a caller pair a legitimate response id
+with a _different_ model — the id was validated for the `:free` suffix but never
+checked against the row it was filling in. The free-tier check therefore moved to
+`POST /api/turns`, which is now the only place a model id enters the system.
+The Postman collection's "Paid model → 400" request moved with it.
+
+**Claiming is guarded three ways** before the provider is called: the row must
+exist, its thread must belong to the caller, and it must still be PENDING. The
+last one matters more than it looks — without it a completed row could be re-run
+indefinitely, each run spending a real upstream call and overwriting a real
+measurement, which would quietly corrupt the leaderboard's speed numbers.
+
+**The two write routes carry no token-bucket cost.** Shield and bot detection
+only. The bucket on `/api/chat` is sized in model calls because that is what
+spends money; charging a turn or a vote against it would change what the number
+means, and "30" would stop being "ten three-model prompts".
+
+#### Found while building
+
+- **The stopwatch could be read twice and gave two different answers.** A call is
+  now read once for the stream's finish frame and once to write the row,
+  milliseconds apart, and the browser and the database disagreed about the same
+  request: 179.8 tokens/sec on screen against 179.6 stored. Neither number was
+  wrong, which is exactly what made it insidious — it would have shown up much
+  later as a leaderboard that never quite matched what people remembered seeing.
+  `createCallTimer` now caches its first read and returns it forever after.
+  Confirmed fixed by observation: the stream and the row now report identical
+  numbers on every model.
+- **Prisma's default 2-second `maxWait` was too short for a cold start, and it
+  returned a 500.** The first `POST /api/turns` against a freshly started server
+  failed with "Unable to start a transaction in the given time"; the identical
+  request a moment later succeeded. Timed it rather than guessing: the first
+  transaction takes **11 seconds** — TCP connect plus a TLS handshake to the
+  remote pooled Postgres — against 0.5s warm. Left alone that is a 500 on the
+  first prompt after every deploy and every serverless cold start, which is the
+  worst possible moment for one. `TRANSACTION_OPTIONS` in
+  `features/database/prisma.ts` raises `maxWait` to 15s and `timeout` to 20s, and
+  both transactions use it. Sized for a slow network, not slow queries.
+- **A repeated model id in one turn would have been a 500.** The database refuses
+  it with `@@unique([turnId, modelId])`, correctly, but a unique violation
+  surfacing as a server error is the wrong answer to what is plainly a bad
+  request. Caught in the Zod schema now and reported as a 400.
+
+#### Corrected in review
+
+Four findings, all valid, all fixed. Two of them shared a root cause: there was
+no way for a call to _reserve_ a response row, only to check it.
+
+- **Claiming a response was not atomic.** `claimResponse` read the row, saw
+  PENDING, and then called the provider. Two overlapping requests for the same
+  owned id both passed that check, both spent an upstream call, and both wrote an
+  answer — the slower one silently overwriting the faster one's content and
+  metrics. Nothing in the old code reserved anything; the terminal writes updated
+  by row id alone. Fixed by making the status check a conditional update rather
+  than a read: `updateMany` moves the row to a new `STREAMING` status, and
+  `count` decides the winner. Exactly one concurrent caller can match. Terminal
+  writes are also conditioned on the reservation still being the caller's, using
+  `startedAt` as the lease's identity, so a call whose reservation expired cannot
+  come back and clobber whoever took over.
+- **A failed response could never be retried.** FAILED was terminal, so a
+  transient upstream rate-limit — which free models produce constantly — cost that
+  model its slot in the turn permanently, while the UI advertised a retry that
+  could only ever return 409. FAILED is now claimable again. COMPLETE stays
+  terminal, which is the part that matters: the vote rule's safety argument
+  depends on the count of completed answers never falling, and nothing ever
+  leaves COMPLETE. The "status only moves one way" note written above during the
+  build was too strong, and has been corrected here and in the schema rather than
+  left to mislead.
+- **Reservations expire.** Introducing STREAMING introduced a way to strand a
+  row: a stream killed mid-flight never reaches `onFinish` or `onError`, and
+  without an expiry that row would sit reserved forever, unanswerable and
+  unretryable. A reservation is honoured for 120s — comfortably past the route's
+  own 60s `maxDuration`, so a slow-but-alive call is never stolen from under
+  itself — after which another call may take it over.
+- **Messages bypassed the stored prompt.** A caller holding a legitimate pending
+  response id could send entirely different text. The model answered _that_, and
+  the answer plus its speed numbers were then filed under the turn's canonical
+  prompt — a quiet corruption of exactly the data this app exists to collect.
+  The route now requires the final user message to equal the turn's prompt.
+  Earlier messages are not checked and should not be: each model carries its own
+  separate conversation, which the client legitimately owns and replays, and the
+  server cannot reconstruct it. A rejection releases the reservation back to
+  PENDING rather than FAILED — nothing was attempted, so the row must look
+  untouched.
+- **The first version of that prompt binding could still be bypassed.** It
+  searched backwards for the most recent _user_ message, which meant a caller
+  could send the turn's real prompt and then append a trailing _assistant_ turn.
+  The prompt was present, so the check passed — while the model's actual final
+  input was the injected text. Putting words in a model's mouth as a trailing
+  assistant message is a well-known way to steer its answer, and the answer it
+  produced would still have been filed under the turn's prompt with its speed
+  numbers attached, which is the same corruption the binding was added to
+  prevent, just through a narrower door. The check is now on the last message
+  rather than the last user message: the conversation has to _end_ on the turn's
+  prompt. That costs nothing, because a genuine turn always ends on the question
+  being asked, and it was verified not to break a real follow-up.
+- **And even that was still bypassable, which is what finally settled the
+  shape.** With the prompt required to be the last message, a caller could still
+  put entirely fabricated history in front of it — invented earlier questions,
+  invented earlier answers — and all of it reached the model and shaped the
+  answer, which was then stored against the canonical turn. There is no
+  validating that away: the whole array is the caller's invention, so there is
+  nothing to check it against.
+
+  Except there is, and it had been sitting in this feature's own schema the whole
+  time. `Turn.index`, `Turn.prompt` and `ModelResponse.content` **are** a
+  per-model transcript — the "each model's own conversation is the thread's turns
+  in index order" line written at the top of this feature is a description of a
+  query. The comment justifying client-supplied history said "the server cannot
+  reconstruct it", and that was simply false by the time it was written.
+
+  So `/api/chat` stopped accepting history. `features/chat/conversation.ts`
+  rebuilds it: every earlier turn's prompt paired with _this_ model's COMPLETE
+  answer to it, in order, then the current turn's prompt. The body is now a
+  `modelResponseId` and nothing else, and it is `.strict()`, so a stale client
+  still posting `messages` gets a plain 400 rather than having its history
+  silently ignored — which would look like the server obeying it.
+
+  The pattern is worth keeping in mind, because four rounds of review found the
+  same bug four times: the model id could point at another row, then the prompt
+  could differ from the turn's, then the prompt could be right but followed by a
+  steering assistant turn, then the prompt could be right and last with invented
+  history in front. Each fix validated one more field and the next probe found
+  the next field. What ended it was not a better check but deleting the input —
+  nothing from the browser is trusted now because nothing needs to be sent. When
+  a validation rule needs tightening for the third time, the question is probably
+  whether the field should exist.
+
+- **The collection's "Unknown model" request had gone stale.** It still sent the
+  old `modelId` field and omitted the now-required `modelResponseId`, so it was
+  exercising body validation while claiming to exercise the provider-failure
+  path. Exactly the way a collection starts lying about the API. Fixed, and three
+  requests added for the behaviour above: the concurrent-claim 409, the retry of a
+  FAILED row, and the prompt-mismatch 400.
+
+#### Also fixed: the cold start, properly
+
+The raised `maxWait` recorded above was the wrong shape of fix on its own. It
+stopped the 500 but left the first prompt after every deploy waiting eleven
+seconds for a TLS handshake, and it turned out not even to be reliable — a
+client regenerated mid-session blew through 15s and returned a 500 again.
+`instrumentation.ts` now opens the first connection at boot, before the server
+accepts a request, so nobody ever pays for it. It is deliberately not fatal: a
+database briefly unreachable at boot should not stop the server from serving the
+pages that do not need it. `TRANSACTION_OPTIONS` keeps the raised timeout as a
+backstop for when the warm-up was itself too slow or failed.
+
+#### The fixes, verified by hand
+
+Against the running dev server and the real database, all green:
+
+- **Two genuinely simultaneous requests** for the same PENDING row, fired in
+  parallel: one 200, one 409 "That model is already answering this prompt." The
+  row afterwards holds exactly one answer.
+- **A mismatched prompt** → 400, and the row reads PENDING with no reservation
+  afterwards — released, not failed.
+- **History is genuinely rebuilt server-side, proven by a model's own memory.**
+  Turn 1: "My favorite color is burnt orange. Reply with just the word: noted."
+  → the row stored `"noted"`. Turn 2, in the same thread, sending **no history
+  at all**, only a response id: "What is my favorite color?" → the model answered
+  `"burnt orange"`. It could only know that from the transcript the server
+  assembled and sent, which is the whole claim, demonstrated rather than
+  asserted.
+- **A body carrying `messages`** — fabricated earlier questions and answers with
+  the turn's genuine prompt last, the exact shape that defeated every previous
+  version of the check → **400**, refused before anything else happens.
+- **Re-answering a COMPLETE row** → 409. Still closed for good.
+- **A genuinely nonexistent model** (`ghost/model-that-never-was:free`, which
+  passes the `:free` shape check and cannot exist) → the stream carried only
+  "That model didn't answer. You can try it again.", the row read FAILED, and
+  nothing matching `openrouter`, `APICallError` or `RetryError` appeared anywhere
+  in the response.
+- **Retrying that FAILED row** → accepted and streamed. It fails again, being a
+  fake model, but it is no longer locked out.
+- **The first request after a cold boot** → 201, no timeout, with the warm-up in
+  place.
+
+The full 21-check route suite was re-run afterwards and still passes, so none of
+this regressed the turn, vote, or streaming paths.
+
+#### An unresolved contradiction, flagged not resolved
+
+`CLAUDE.md` says cost will always read $0.0000 and to **show it anyway**, since
+it is still a real, honestly measured number. Feature 6 below says **no cost
+shown**, and feature 9 says no cost stat on the leaderboard. Those disagree. The
+column exists either way; the display question belongs to feature 6 and should be
+settled there rather than silently by whichever screen gets built first.
+
+#### Verified by hand
+
+The migration is `prisma/migrations/20260813032554_initial_data_model`. A
+throwaway raw-SQL probe ran against the real Prisma Postgres instance — raw SQL
+on purpose, since the point was what Postgres itself refuses, not what the Prisma
+client refuses on the way there. It seeded two users, a thread, two turns, and
+four responses, then deleted the users and confirmed the cascade emptied every
+table. Probe deleted afterwards.
+
+Allowed, as they should be:
+
+- A vote from user A for a `COMPLETE` response on the same turn.
+- A vote from user B on that same turn for a different response.
+
+Refused by Postgres, each by the named constraint:
+
+- The same user voting twice on one turn — `Vote_turnId_userId_key`.
+- A winner belonging to a different turn — `Vote_modelResponseId_turnId_fkey`.
+  This is the composite key earning its keep.
+- Two responses for the same model in one turn — `ModelResponse_turnId_modelId_key`.
+- Two turns claiming the same index in a thread — `Turn_threadId_index_key`.
+- A thread owned by a nonexistent user — `Thread_userId_fkey`.
+- A duplicate Clerk id — `User_clerkUserId_key`.
+- A status outside the enum (`STREAMING` was the probe value) — `22P02`.
+
+Also confirmed: `costUsd` defaults to `0.000000`, and the seeded turn reports
+exactly 2 `COMPLETE` responses, which is the count the vote transaction will
+read.
+
+`pnpm check` (format, lint, typecheck) and `pnpm build` both clean.
+
+#### The routes, verified by hand
+
+A curl harness mirroring the Postman collection, against a running dev server,
+the real Clerk instance, real free models, and the real database. **21 of 21
+checks passed**, plus a separate 7-check cold-start run of the vote path.
+
+`POST /api/turns` — a three-model turn (201, three PENDING rows), a follow-up
+turn on the same thread landing at `index` 1, a one-model turn, a paid model
+refused 400, the same model listed twice refused 400, four models refused 400, an
+unknown thread 404, and unauthenticated 401.
+
+`POST /api/chat` — two models streamed into their claimed rows, then re-answering
+a COMPLETE row 409, an unknown response id 404, and a missing `modelResponseId` 400.
+
+`POST /api/votes` — the whole rule, end to end:
+
+- Voting before any model answered → 409.
+- Voting for a response still PENDING, on a turn that is otherwise votable → 409.
+  That is the status check in the transaction, not the foreign key, which would
+  have accepted the row.
+- A winner belonging to a different turn → 400.
+- A one-model turn → 409, permanently.
+- The real vote → 201.
+- The same person voting again → 409, off the unique index.
+- Unauthenticated → 401.
+
+Read back from the database afterwards: two COMPLETE rows carrying real TTFT,
+tokens/sec, input/output/total tokens and `costUsd` at `0.000000`, one row left
+PENDING, the turn indexes in order, and exactly one `Vote` joined to the winning
+model. The persisted numbers match what the stream reported, exactly.
+
+**The failure path was exercised for real, not simulated.** During the first run
+`inclusionai/ling-3.0-tiny:free` was rate-limited upstream. The row was marked
+FAILED, the stream carried only "That model didn't answer. You can try it again.",
+and the full provider exception went to the server log alone. It also meant that
+turn only ever had one COMPLETE answer, so every vote on it was refused — the ≥2
+rule doing exactly its job on an unplanned input, which is better evidence than
+the staged case.
+
+Not verified, for lack of a second Clerk account: the 403 paths — writing a turn
+into someone else's thread, and claiming someone else's response row. Both are
+`if` statements over a server-resolved id, both have Postman requests waiting
+with the setup written down, but neither has been proven by observation.
+
+`pnpm check` (format, lint, typecheck) and `pnpm build` clean, with `/api/turns`
+and `/api/votes` both in the route manifest.
+
+#### The Postman collection
+
+Two new folders, `Turns` and `Votes`, and the `Chat` folder reworked around
+`modelResponseId`. Every request carries a description saying what to expect and
+why, and the capture scripts save `threadId`, `turnId` and the response ids
+forward so the folders run in order — Turns, then Chat, then Votes. Scripts
+capture variables only, never assert, and they use the same `save` helper as the
+Setup folder so an active environment is written to rather than shadowed.
+
+Two requests are deliberately manual: "Someone else's thread → 403" and
+"Someone else's response → 403" need a second Clerk user, and say so.
 
 #### Prisma is connected
 
@@ -314,6 +706,9 @@ and typecheck, lint, and `next build` all pass.
 
 No migration has been run. `prisma migrate dev` is the first act of the schema
 decision, not part of this step.
+
+_Since superseded: the schema decision has been made and the first migration is
+applied. See "What was decided" and "Verified by hand" above._
 
 ### 4. Design & look
 
@@ -544,6 +939,10 @@ constraint, and the turn-creation race from three parallel POSTs. Inventing a
 schema inside a verification pass would settle both by accident. The connection
 itself is already proven (see "Prisma is connected"); it is only the schema
 that is missing.
+
+**No longer blocked.** The schema was decided and
+`20260813032554_initial_data_model` applied on 2026-08-13, with both questions
+settled rather than defaulted — see feature 3's "What was decided" above.
 
 ### Blocked: PostHog events
 
