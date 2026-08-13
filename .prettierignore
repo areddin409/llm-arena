@@ -1,0 +1,30 @@
+# Build output and dependencies
+node_modules/
+.next/
+out/
+build/
+coverage/
+
+# Generated, never hand-edited
+prisma/generated/
+next-env.d.ts
+pnpm-lock.yaml
+
+# Vendored agent skills. These are committed so a fresh clone has identical
+# guidance, but skills-lock.json records their upstream hash — reformatting
+# them would make every skill read as locally modified.
+.claude/skills/
+.agents/skills/
+
+# Obsidian vault state and Excalidraw sketches. Excalidraw owns the encoding
+# of its own markdown; reformatting it corrupts the drawing.
+docs/.obsidian/
+docs/ui-sketch/
+
+# The Postman collection is edited in Postman, which owns its formatting.
+# Reformatting it here produces a diff on every export for no benefit.
+docs/*.postman_collection.json
+docs/*.postman_environment*.json
+
+# Written and re-added by `next dev` — not ours to format.
+AGENTS.md

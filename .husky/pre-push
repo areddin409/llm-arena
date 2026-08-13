@@ -1,0 +1,4 @@
+# Slow gate: the whole project. A type error can't be caught by looking at
+# staged files alone — changing one file breaks the type of another — so the
+# full check runs here, once per push, rather than on every commit.
+pnpm run check

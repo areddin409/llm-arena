@@ -1,0 +1,3 @@
+# Fast gate: format and lint the staged files only, in well under a second.
+# The whole-project typecheck runs on push instead — see .husky/pre-push.
+pnpm exec lint-staged
