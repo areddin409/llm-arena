@@ -20,11 +20,20 @@
 # production
 /build
 
+# prisma - the generated client is rebuilt by `prisma generate`, never committed
+/prisma/generated/
+**/generated/prisma/
+.prisma/
+
 # misc
 .DS_Store
+Thumbs.db
+ehthumbs.db
+desktop.ini
 *.pem
 
 # debug
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -32,6 +41,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
 .vercel
@@ -39,3 +49,25 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# editors (personal layout, not shared - but a team-wide vscode config can opt in)
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# claude code (local machine settings, not shared)
+# note: .claude/skills/ and .agents/skills/ ARE committed - skills-lock.json
+# records their source + hash, but the files themselves travel with the repo
+# so a fresh clone has identical agent guidance with no restore step.
+.claude/settings.local.json
+
+# obsidian vault state (docs/) - workspace layout + installed plugin binaries
+docs/.obsidian/
+
+# claudian session transcripts (docs/) - personal, not for the repo
+docs/.claudian/
+
+# filled-in postman environment (holds a clerk secret key). the committed
+# template is docs/llm-arena.postman_environment.template.json
+docs/*.postman_environment.json
