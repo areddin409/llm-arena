@@ -213,9 +213,9 @@ No test runner, as decided:
   reformatted one, not what was staged. Probe commit removed afterwards.
 - `pnpm check` (format, lint, typecheck) and `pnpm build` both clean.
 
-Pre-push was not fired through an actual `git push` — it runs `pnpm run check`,
-which was verified directly, and it is invoked through the same
-`core.hooksPath=.husky/_` mechanism that pre-commit was proven on.
+- Pre-push fired on the real `git push` that opened the pull request for this
+  work: the full `pnpm check` ran ahead of the upload, and the push only
+  completed after it passed.
 
 ### 3. Data model
 
