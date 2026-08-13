@@ -20,9 +20,7 @@ There are rough hand-drawn sketches for the arena screen, the leaderboard, and t
 | --- | ------------------------------------------- | ---------- | ----------- |
 | 1   | Connecting to a model                       | Foundation | done        |
 | 2   | Coding standards & tooling                  | Foundation | done        |
-| 3   | Data model                                  | Foundation | in progress |
-|     | ↳ schema & first migration                  |            | done        |
-|     | ↳ routes & Postman                          |            | open        |
+| 3   | Data model                                  | Foundation | done        |
 | 4   | Design & look                               | Foundation | not started |
 | 5   | Model picker                                | Slice 1    | not started |
 | 6   | Send a prompt, parallel streams, and voting | Slice 1    | not started |
@@ -268,9 +266,9 @@ is a data-model decision, so it gets made here.
 - [x] Prisma connected and proven against the real database (see below)
 - [x] Decide the approach
 - [x] Write the schema and run the first migration, proven against the live database
-- [ ] Build the write paths: `POST /api/turns`, `POST /api/votes`, and persistence
+- [x] Build the write paths: `POST /api/turns`, `POST /api/votes`, and persistence
       inside `/api/chat`
-- [ ] Add all three routes to the Postman collection, happy path and failures
+- [x] Add all three routes to the Postman collection, happy path and failures
 
 #### What was decided
 
@@ -362,6 +360,70 @@ lives in the browser and never needs to survive a refresh.
 link; only writing to one requires being the owner, which is an ownership check
 in a route, not a column.
 
+#### The write paths
+
+Three routes, and one shared preamble. `POST /api/turns` creates the thread (if
+new), the turn, and one PENDING `ModelResponse` per model in a single
+transaction; `POST /api/chat` claims one of those rows and fills it in;
+`POST /api/votes` runs the ≥2 check and writes the vote. Domain logic lives in
+`features/turns/`, `features/votes/`, `features/chat/persist-response.ts` and
+`features/users/upsert-user.ts` as functions returning a discriminated result;
+the route handlers only map those results onto a status and a sentence.
+
+**`features/security/guard.ts` exists because three routes now share the same
+three steps** — require a Clerk session, ask Arcjet, hand back a trusted user id.
+Copy-pasting that into a third handler is how one of them eventually stops
+agreeing with the others. The order inside it is deliberate: Clerk first so an
+anonymous caller costs nothing and never reaches a rule, Arcjet before the body
+is read, and the user id resolved server-side so a per-user limit cannot be
+sidestepped with a header. `features/http/plain-response.ts` does the same job
+for the refusal shape.
+
+**`/api/chat` no longer accepts a model id, and that is a security fix, not a
+tidy-up.** The request now names a `modelResponseId` and the server reads the
+model back off that row. The old shape let a caller pair a legitimate response id
+with a _different_ model — the id was validated for the `:free` suffix but never
+checked against the row it was filling in. The free-tier check therefore moved to
+`POST /api/turns`, which is now the only place a model id enters the system.
+The Postman collection's "Paid model → 400" request moved with it.
+
+**Claiming is guarded three ways** before the provider is called: the row must
+exist, its thread must belong to the caller, and it must still be PENDING. The
+last one matters more than it looks — without it a completed row could be re-run
+indefinitely, each run spending a real upstream call and overwriting a real
+measurement, which would quietly corrupt the leaderboard's speed numbers.
+
+**The two write routes carry no token-bucket cost.** Shield and bot detection
+only. The bucket on `/api/chat` is sized in model calls because that is what
+spends money; charging a turn or a vote against it would change what the number
+means, and "30" would stop being "ten three-model prompts".
+
+#### Found while building
+
+- **The stopwatch could be read twice and gave two different answers.** A call is
+  now read once for the stream's finish frame and once to write the row,
+  milliseconds apart, and the browser and the database disagreed about the same
+  request: 179.8 tokens/sec on screen against 179.6 stored. Neither number was
+  wrong, which is exactly what made it insidious — it would have shown up much
+  later as a leaderboard that never quite matched what people remembered seeing.
+  `createCallTimer` now caches its first read and returns it forever after.
+  Confirmed fixed by observation: the stream and the row now report identical
+  numbers on every model.
+- **Prisma's default 2-second `maxWait` was too short for a cold start, and it
+  returned a 500.** The first `POST /api/turns` against a freshly started server
+  failed with "Unable to start a transaction in the given time"; the identical
+  request a moment later succeeded. Timed it rather than guessing: the first
+  transaction takes **11 seconds** — TCP connect plus a TLS handshake to the
+  remote pooled Postgres — against 0.5s warm. Left alone that is a 500 on the
+  first prompt after every deploy and every serverless cold start, which is the
+  worst possible moment for one. `TRANSACTION_OPTIONS` in
+  `features/database/prisma.ts` raises `maxWait` to 15s and `timeout` to 20s, and
+  both transactions use it. Sized for a slow network, not slow queries.
+- **A repeated model id in one turn would have been a 500.** The database refuses
+  it with `@@unique([turnId, modelId])`, correctly, but a unique violation
+  surfacing as a server error is the wrong answer to what is plainly a bad
+  request. Caught in the Zod schema now and reported as a 400.
+
 #### An unresolved contradiction, flagged not resolved
 
 `CLAUDE.md` says cost will always read $0.0000 and to **show it anyway**, since
@@ -401,10 +463,64 @@ read.
 
 `pnpm check` (format, lint, typecheck) and `pnpm build` both clean.
 
-Not verified, because it does not exist yet: the ≥2 rule itself. It lives in the
-vote transaction, which is in the still-open checklist item above, and it cannot
-be exercised until `POST /api/votes` is built. The database half of the rule is
-proven; the application half is designed and unbuilt.
+#### The routes, verified by hand
+
+A curl harness mirroring the Postman collection, against a running dev server,
+the real Clerk instance, real free models, and the real database. **21 of 21
+checks passed**, plus a separate 7-check cold-start run of the vote path.
+
+`POST /api/turns` — a three-model turn (201, three PENDING rows), a follow-up
+turn on the same thread landing at `index` 1, a one-model turn, a paid model
+refused 400, the same model listed twice refused 400, four models refused 400, an
+unknown thread 404, and unauthenticated 401.
+
+`POST /api/chat` — two models streamed into their claimed rows, then re-answering
+a COMPLETE row 409, an unknown response id 404, and a missing `modelResponseId` 400.
+
+`POST /api/votes` — the whole rule, end to end:
+
+- Voting before any model answered → 409.
+- Voting for a response still PENDING, on a turn that is otherwise votable → 409.
+  That is the status check in the transaction, not the foreign key, which would
+  have accepted the row.
+- A winner belonging to a different turn → 400.
+- A one-model turn → 409, permanently.
+- The real vote → 201.
+- The same person voting again → 409, off the unique index.
+- Unauthenticated → 401.
+
+Read back from the database afterwards: two COMPLETE rows carrying real TTFT,
+tokens/sec, input/output/total tokens and `costUsd` at `0.000000`, one row left
+PENDING, the turn indexes in order, and exactly one `Vote` joined to the winning
+model. The persisted numbers match what the stream reported, exactly.
+
+**The failure path was exercised for real, not simulated.** During the first run
+`inclusionai/ling-3.0-tiny:free` was rate-limited upstream. The row was marked
+FAILED, the stream carried only "That model didn't answer. You can try it again.",
+and the full provider exception went to the server log alone. It also meant that
+turn only ever had one COMPLETE answer, so every vote on it was refused — the ≥2
+rule doing exactly its job on an unplanned input, which is better evidence than
+the staged case.
+
+Not verified, for lack of a second Clerk account: the 403 paths — writing a turn
+into someone else's thread, and claiming someone else's response row. Both are
+`if` statements over a server-resolved id, both have Postman requests waiting
+with the setup written down, but neither has been proven by observation.
+
+`pnpm check` (format, lint, typecheck) and `pnpm build` clean, with `/api/turns`
+and `/api/votes` both in the route manifest.
+
+#### The Postman collection
+
+Two new folders, `Turns` and `Votes`, and the `Chat` folder reworked around
+`modelResponseId`. Every request carries a description saying what to expect and
+why, and the capture scripts save `threadId`, `turnId` and the response ids
+forward so the folders run in order — Turns, then Chat, then Votes. Scripts
+capture variables only, never assert, and they use the same `save` helper as the
+Setup folder so an active environment is written to rather than shadowed.
+
+Two requests are deliberately manual: "Someone else's thread → 403" and
+"Someone else's response → 403" need a second Clerk user, and say so.
 
 #### Prisma is connected
 

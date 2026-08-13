@@ -51,6 +51,54 @@
       "value": "nvidia/nemotron-3.5-lightning:free",
       "type": "string",
       "description": "Any free-tier OpenRouter id. See the OpenRouter reference folder for the live list."
+    },
+    {
+      "key": "modelIdB",
+      "value": "inclusionai/ling-3.0-tiny:free"
+    },
+    {
+      "key": "modelIdC",
+      "value": "google/gemma-4-26b-a4b-it:free"
+    },
+    {
+      "key": "threadId",
+      "value": ""
+    },
+    {
+      "key": "turnId",
+      "value": ""
+    },
+    {
+      "key": "modelResponseId",
+      "value": ""
+    },
+    {
+      "key": "modelResponseIdB",
+      "value": ""
+    },
+    {
+      "key": "pendingModelResponseId",
+      "value": ""
+    },
+    {
+      "key": "soloTurnId",
+      "value": ""
+    },
+    {
+      "key": "soloModelResponseId",
+      "value": ""
+    },
+    {
+      "key": "voteId",
+      "value": ""
+    },
+    {
+      "key": "otherUsersThreadId",
+      "value": ""
+    },
+    {
+      "key": "otherUsersModelResponseId",
+      "value": ""
     }
   ],
   "item": [
@@ -292,8 +340,420 @@
       ]
     },
     {
+      "name": "Turns",
+      "description": "Creates the turn a prompt belongs to, and the PENDING ModelResponse rows the parallel /api/chat calls fill in.\n\nThis endpoint exists to kill a race. One arena prompt is up to three simultaneous POSTs to /api/chat, and if each of those created the turn they share, they would collide. So none of them does — this runs first, alone, in one transaction, and hands back ids nobody else holds.\n\nIt calls no model and spends nothing upstream, so it carries no token-bucket cost. Shield and bot detection still apply.\n\n**Run \"Create a turn\" before anything in the Chat or Votes folders** — everything downstream needs the ids it saves.",
+      "item": [
+        {
+          "name": "Create a turn (three models)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// See the Setup folder for why this picks a scope rather than always",
+                  "// writing to the collection.",
+                  "const save = (key, value) => (pm.environment.name",
+                  "    ? pm.environment.set(key, value)",
+                  "    : pm.collectionVariables.set(key, value));",
+                  "",
+                  "const turn = pm.response.json();",
+                  "if (turn && turn.responses) {",
+                  "    save('threadId', turn.threadId);",
+                  "    save('turnId', turn.turnId);",
+                  "    save('modelResponseId', turn.responses[0].modelResponseId);",
+                  "    save('modelResponseIdB', turn.responses[1].modelResponseId);",
+                  "    save('pendingModelResponseId', turn.responses[2].modelResponseId);",
+                  "    console.log('turn ' + turn.turnId + ' created with ' + turn.responses.length + ' pending responses');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"prompt\": \"Write two sentences about the color rust.\",\n  \"models\": [\n    {\n      \"id\": \"{{modelId}}\",\n      \"name\": \"Nemotron 3.5 Lightning\"\n    },\n    {\n      \"id\": \"{{modelIdB}}\",\n      \"name\": \"Ling 3.0 Tiny\"\n    },\n    {\n      \"id\": \"{{modelIdC}}\",\n      \"name\": \"Gemma 4 26B\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/turns",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "turns"
+              ]
+            },
+            "description": "The happy path, and the starting point for this whole collection. Expect **201** and a body carrying `threadId`, `turnId`, `index`, and one `{ modelResponseId, modelId }` per model.\n\nOmitting `threadId` starts a new conversation. The response rows come back PENDING; nothing has called a model yet.\n\n`name` is the model's display name from the caller's catalog — the server has no catalog of its own (that's feature 5, in the browser). It is stored as a snapshot so a thread still renders properly if a model is later renamed or drops off the free tier, and it is only ever displayed, never used for logic. The `id` beside it is held to the `:free` shape.\n\nSaves `threadId`, `turnId`, `modelResponseId`, `modelResponseIdB` and `pendingModelResponseId` for the requests that follow. The third id is deliberately left unanswered so the Votes folder can prove you cannot vote for a model that hasn't finished."
+          },
+          "response": []
+        },
+        {
+          "name": "Continue a thread (follow-up turn)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// See the Setup folder for why this picks a scope rather than always",
+                  "// writing to the collection.",
+                  "const save = (key, value) => (pm.environment.name",
+                  "    ? pm.environment.set(key, value)",
+                  "    : pm.collectionVariables.set(key, value));",
+                  "",
+                  "const turn = pm.response.json();",
+                  "if (turn && turn.responses) {",
+                  "    save('turnId', turn.turnId);",
+                  "    save('modelResponseId', turn.responses[0].modelResponseId);",
+                  "    save('modelResponseIdB', turn.responses[1].modelResponseId);",
+                  "    console.log('follow-up turn at index ' + turn.index);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"threadId\": \"{{threadId}}\",\n  \"prompt\": \"Now name one thing that pairs badly with it.\",\n  \"models\": [\n    {\n      \"id\": \"{{modelId}}\",\n      \"name\": \"Nemotron 3.5 Lightning\"\n    },\n    {\n      \"id\": \"{{modelIdB}}\",\n      \"name\": \"Ling 3.0 Tiny\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/turns",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "turns"
+              ]
+            },
+            "description": "Passing `threadId` adds a turn to a conversation you already own. Expect **201** with `index` one higher than the previous turn.\n\nTurns are numbered per thread, which is what lets a single model's own conversation be replayed in order: the thread's turns by `index`, each prompt paired with that model's response. A model that failed a turn simply contributes nothing to its own history.\n\nOverwrites `turnId` and the response ids, so run \"Create a turn\" again if you want the original back."
+          },
+          "response": []
+        },
+        {
+          "name": "Create a one-model turn",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// See the Setup folder for why this picks a scope rather than always",
+                  "// writing to the collection.",
+                  "const save = (key, value) => (pm.environment.name",
+                  "    ? pm.environment.set(key, value)",
+                  "    : pm.collectionVariables.set(key, value));",
+                  "",
+                  "const turn = pm.response.json();",
+                  "if (turn && turn.responses) {",
+                  "    save('soloTurnId', turn.turnId);",
+                  "    save('soloModelResponseId', turn.responses[0].modelResponseId);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"prompt\": \"A turn nobody can vote on.\",\n  \"models\": [\n    {\n      \"id\": \"{{modelId}}\",\n      \"name\": \"Nemotron 3.5 Lightning\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/turns",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "turns"
+              ]
+            },
+            "description": "A perfectly valid turn with a single model. Expect **201**.\n\nIt exists to set up the vote rule: a turn with one answer has nothing to compare, so it can never be voted on. Saves `soloTurnId` and `soloModelResponseId` for the Votes folder."
+          },
+          "response": []
+        },
+        {
+          "name": "Paid model → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"prompt\": \"This should never reach a model.\",\n  \"models\": [\n    {\n      \"id\": \"anthropic/claude-sonnet-4.5\",\n      \"name\": \"Claude Sonnet\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/turns",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "turns"
+              ]
+            },
+            "description": "A well-formed but **paid** OpenRouter id. Expect **400** and the same plain sentence as any other bad body.\n\nThis check used to live on /api/chat, because the model id used to travel in that request. It doesn't any more — /api/chat names a response row and reads the model id back off it — so the `:free` requirement moved here, to the one place an id now enters the system. Every model in this arena is free tier, so the suffix is a real requirement, not a formatting preference.\n\nNo rows are written and OpenRouter is never called."
+          },
+          "response": []
+        },
+        {
+          "name": "Same model twice → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"prompt\": \"This should never reach a model.\",\n  \"models\": [\n    {\n      \"id\": \"{{modelId}}\",\n      \"name\": \"Nemotron 3.5 Lightning\"\n    },\n    {\n      \"id\": \"{{modelId}}\",\n      \"name\": \"Nemotron again\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/turns",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "turns"
+              ]
+            },
+            "description": "Expect **400**. A turn holds one response per model — the database says so with a unique index on (turnId, modelId) — so a repeated id is caught during validation and reported as the plain bad request it is, rather than surfacing as a unique-violation 500."
+          },
+          "response": []
+        },
+        {
+          "name": "Four models → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"prompt\": \"This should never reach a model.\",\n  \"models\": [\n    {\n      \"id\": \"{{modelId}}\",\n      \"name\": \"One\"\n    },\n    {\n      \"id\": \"{{modelIdB}}\",\n      \"name\": \"Two\"\n    },\n    {\n      \"id\": \"{{modelIdC}}\",\n      \"name\": \"Three\"\n    },\n    {\n      \"id\": \"meta-llama/llama-3.3-8b-instruct:free\",\n      \"name\": \"Four\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/turns",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "turns"
+              ]
+            },
+            "description": "Expect **400**. The arena compares at most three models at once, so the cap is enforced at the boundary rather than trusted to the picker UI."
+          },
+          "response": []
+        },
+        {
+          "name": "Unknown thread → 404",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"threadId\": \"thread_that_does_not_exist\",\n  \"prompt\": \"This should never reach a model.\",\n  \"models\": [\n    {\n      \"id\": \"{{modelId}}\",\n      \"name\": \"Nemotron 3.5 Lightning\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/turns",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "turns"
+              ]
+            },
+            "description": "Expect **404** and a plain sentence. Nothing is created — a turn is never orphaned onto a thread that isn't there."
+          },
+          "response": []
+        },
+        {
+          "name": "Someone else's thread → 403",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"threadId\": \"{{otherUsersThreadId}}\",\n  \"prompt\": \"This should never reach a model.\",\n  \"models\": [\n    {\n      \"id\": \"{{modelId}}\",\n      \"name\": \"Nemotron 3.5 Lightning\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/turns",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "turns"
+              ]
+            },
+            "description": "Expect **403**, distinct from the 404 above.\n\nThreads are readable by anyone with the link (feature 8), so a thread belonging to someone else is not a secret and doesn't need to be disguised as missing — but writing into one is closed. Reading is open, writing is owned.\n\n**Needs a second Clerk user.** Set `otherUsersThreadId` by hand: run the Setup folder against a different user, create a turn, then switch back. Without that this returns 404, not 403."
+          },
+          "response": []
+        },
+        {
+          "name": "Unauthenticated → 401",
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"prompt\": \"This should never reach a model.\",\n  \"models\": [\n    {\n      \"id\": \"{{modelId}}\",\n      \"name\": \"Nemotron 3.5 Lightning\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/turns",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "turns"
+              ]
+            },
+            "description": "Deliberately sends no bearer token. Expect **401** and a plain sentence.\n\nClerk is checked before Arcjet, so an anonymous caller never reaches a rule. Creating a turn is a write, and writes need a signed-in person."
+          },
+          "response": []
+        },
+        {
+          "name": "Blocked as a bot → 403",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "User-Agent",
+                "value": "python-requests/2.31.0"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"prompt\": \"This should never reach a model.\",\n  \"models\": [\n    {\n      \"id\": \"{{modelId}}\",\n      \"name\": \"Nemotron 3.5 Lightning\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/turns",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "turns"
+              ]
+            },
+            "description": "A scripted-client User-Agent Arcjet recognises. Expect **403** and the shared blocked sentence — no rule name, ever.\n\nThis route has shield and bot detection but deliberately **no token bucket**. The bucket on /api/chat is sized in model calls, because that is what costs money; charging a turn against it would quietly change what the number means.\n\nNote bot detection is sticky: after this fires, plain Postman requests from the same client can keep getting 403 for a couple of minutes while the reputation decays. Test bots and rate limits in separate runs."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
       "name": "Chat",
-      "description": "POST /api/chat — one model, one request, one stream.",
+      "description": "Streams one model's answer into a response row that /api/turns already created.\n\n**Run \"Create a turn\" in the Turns folder first.** The model id no longer travels in this body — the request names a `modelResponseId`, and the server reads the model back off that row. That closes a gap the old shape left open, where a caller could pair a legitimate response id with a different model, and it means the `:free` check now lives on /api/turns where the id actually arrives.\n\nIn the real arena three of these fire at once, in parallel. Each holds its own response id, so they never race.",
       "item": [
         {
           "name": "Send a prompt",
@@ -307,7 +767,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"modelId\": \"{{modelId}}\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Write two sentences about the color rust.\"\n    }\n  ]\n}",
+              "raw": "{\n  \"modelResponseId\": \"{{modelResponseId}}\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Write two sentences about the color rust.\"\n    }\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -324,7 +784,40 @@
                 "chat"
               ]
             },
-            "description": "The happy path. Watch for the trailing `\"type\":\"finish\"` event — that's where timeToFirstTokenMs, tokensPerSecond, outputTokens and totalMs live.\n\nFree models are genuinely slow and sometimes rate-limited upstream. If you get `\"type\":\"error\"` with \"That model didn't answer\", the real provider error is in the dev server log — that separation is deliberate."
+            "description": "The happy path. Expect a stream, and watch for the trailing `\"type\":\"finish\"` event — that is where timeToFirstTokenMs, tokensPerSecond, outputTokens and totalMs live.\n\nWhen the stream closes, the same numbers are written to the response row along with the answer text and the input/output/total token counts. `costUsd` stays 0.000000: every model here is free tier, so zero is the honest measurement rather than a placeholder for one. Token totals are stored exactly as the provider reported them and never recomputed from input + output — reasoning and cached-input tokens land in a provider's total differently.\n\nFree models are genuinely slow and sometimes rate-limited upstream. If you get `\"type\":\"error\"` with \"That model didn't answer\", the row is marked FAILED and the real provider error is in the dev server log — that separation is deliberate."
+          },
+          "response": []
+        },
+        {
+          "name": "Send the second model's prompt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"modelResponseId\": \"{{modelResponseIdB}}\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Write two sentences about the color rust.\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chat",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "chat"
+              ]
+            },
+            "description": "The same prompt, to the turn's second model. In the browser this fires simultaneously with the request above; here, send it right after.\n\nRun it so the turn has two COMPLETE answers — that is what makes the Votes folder work at all. The turn's third model is left alone on purpose, so \"Model still answering → 409\" has something to prove.\n\nThis is also the point of one-request-per-model: if this model is slow or down, the first model's answer is already on screen and untouched."
           },
           "response": []
         },
@@ -340,7 +833,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"modelId\": \"{{modelId}}\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Write two sentences about the color rust.\"\n    },\n    {\n      \"role\": \"assistant\",\n      \"content\": \"Rust is a warm reddish-brown, the color of weathered iron. It reads as earthy rather than bright.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Now name one thing that pairs badly with it.\"\n    }\n  ]\n}",
+              "raw": "{\n  \"modelResponseId\": \"{{modelResponseId}}\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Write two sentences about the color rust.\"\n    },\n    {\n      \"role\": \"assistant\",\n      \"content\": \"Rust is a warm reddish-brown, the color of weathered iron. It reads as earthy rather than bright.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Now name one thing that pairs badly with it.\"\n    }\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -357,7 +850,7 @@
                 "chat"
               ]
             },
-            "description": "The endpoint holds no conversation state — the client sends the whole history each time. In the real arena each model carries its own separate history, which is what makes a follow-up continue three independent conversations rather than one merged one."
+            "description": "Run \"Continue a thread\" in the Turns folder first — a follow-up is a new turn, so it needs a fresh response row.\n\nThe endpoint holds no conversation state: the client sends the whole history each time. In the real arena each model carries its own separate history, which is what makes a follow-up continue three independent conversations rather than one merged one."
           },
           "response": []
         },
@@ -376,7 +869,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"modelId\": \"{{modelId}}\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"This should never reach a model.\"\n    }\n  ]\n}",
+              "raw": "{\n  \"modelResponseId\": \"{{modelResponseId}}\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"This should never reach a model.\"\n    }\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -398,6 +891,105 @@
           "response": []
         },
         {
+          "name": "Someone else's response → 403",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"modelResponseId\": \"{{otherUsersModelResponseId}}\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Write two sentences about the color rust.\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chat",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "chat"
+              ]
+            },
+            "description": "Expect **403** and no model call.\n\nA response id is a cuid, so guessing one isn't the threat. A shared thread link handing its ids to a signed-in stranger is — and that stranger must not be able to spend this app's upstream budget filling in someone else's turn. Reading a thread is open; writing into one is owned.\n\n**Needs a second Clerk user** — set `otherUsersModelResponseId` by hand, the same way as \"Someone else's thread\" in the Turns folder."
+          },
+          "response": []
+        },
+        {
+          "name": "Unknown response id → 404",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"modelResponseId\": \"response_that_does_not_exist\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Write two sentences about the color rust.\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chat",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "chat"
+              ]
+            },
+            "description": "Expect **404** and a plain sentence. The row is looked up before the provider is called, so a bad id costs nothing upstream."
+          },
+          "response": []
+        },
+        {
+          "name": "Answering twice → 409",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"modelResponseId\": \"{{modelResponseId}}\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Write two sentences about the color rust.\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chat",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "chat"
+              ]
+            },
+            "description": "Send \"Send a prompt\" first, let it finish, then send this. Expect **409**, \"That model has already answered this prompt.\"\n\nPENDING is the only claimable state. Without that, a completed row could be re-run indefinitely — each run costing a real upstream call and overwriting a real measurement with a new one, which would quietly corrupt the leaderboard's speed numbers."
+          },
+          "response": []
+        },
+        {
           "name": "Blocked as a bot → 403",
           "request": {
             "method": "POST",
@@ -413,7 +1005,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"modelId\": \"{{modelId}}\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"This should never reach a model.\"\n    }\n  ]\n}",
+              "raw": "{\n  \"modelResponseId\": \"{{modelResponseId}}\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"This should never reach a model.\"\n    }\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -446,7 +1038,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"modelId\": \"\",\n  \"messages\": []\n}",
+              "raw": "{}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -463,7 +1055,7 @@
                 "chat"
               ]
             },
-            "description": "Not a single-shot request — send it repeatedly to drain the bucket.\n\nThe limit is a token bucket keyed by the signed-in Clerk user, not by IP: capacity 30, refilling 15 per 60s, and one model call spends one token. Because one arena prompt is three parallel calls, that is ten three-model prompts back to back and five a minute sustained.\n\nThe body here is deliberately malformed so nothing upstream is spent while draining it: Arcjet decides before the body is parsed, so each send costs a token and returns 400 until the bucket empties. Expect 400 up to the 30th send, then 429 with a plain sentence naming the real seconds to wait (\"Try again in 55 seconds.\"). Wait a minute and it allows again."
+            "description": "Not a single-shot request — send it repeatedly to drain the bucket.\n\nThe limit is a token bucket keyed by the signed-in Clerk user, not by IP: capacity 30, refilling 15 per 60s, and one model call spends one token. Because one arena prompt is three parallel calls, that is ten three-model prompts back to back and five a minute sustained.\n\nThe body is deliberately empty so nothing upstream is spent while draining it: Arcjet decides before the body is parsed, so each send costs a token and returns 400 until the bucket empties. Expect 400s, then 429 with a plain sentence naming the real seconds to wait. Wait a minute and it allows again.\n\nThe bucket is eventually consistent, so denials land a beat late rather than exactly on the request that crosses capacity — a fast local burst can overrun before the 429s start. The spend is bounded, just not to the precise boundary."
           },
           "response": []
         },
@@ -479,7 +1071,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"modelId\": \"\",\n  \"messages\": []\n}",
+              "raw": "{\n  \"messages\": []\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -497,39 +1089,6 @@
               ]
             },
             "description": "Empty model id and no messages. Expect 400 and a plain sentence — the zod failure detail stays on the server."
-          },
-          "response": []
-        },
-        {
-          "name": "Paid model → 400",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"modelId\": \"anthropic/claude-sonnet-4.5\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"This should never reach a model.\"\n    }\n  ]\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "{{baseUrl}}/api/chat",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "chat"
-              ]
-            },
-            "description": "A well-formed but paid OpenRouter id, sent by a properly signed-in caller. Expect 400 and the same plain sentence as any other malformed body — no stream opens and OpenRouter is never called, so this app's credits are never spent on a model outside the free tier. Every model in this arena is free tier, so the `:free` suffix is required on every id the route accepts."
           },
           "response": []
         },
@@ -562,7 +1121,300 @@
                 "chat"
               ]
             },
-            "description": "The id passes the `:free` shape check but nothing validates it against OpenRouter's catalog, so this fails at call time. Expect a 200 with an `\"type\":\"error\"` event carrying a plain sentence — the stream had already opened by the time the provider refused. The real error goes to the server log."
+            "description": "Create a turn using a well-formed `:free` id that no longer exists on OpenRouter, then stream it with this request.\n\nThe id passes the shape check — that check cannot know which ids are real, since the live catalog is feature 5 — so the failure happens at call time and is handled: the stream carries \"That model didn't answer. You can try it again.\", the row is marked FAILED, and the full provider exception goes to the server log only. That split is the rule, not an accident."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Votes",
+      "description": "One person's pick of the best answer in a turn. **Run the Turns folder first, then stream at least two answers from the Chat folder** — a vote is impossible until two models have actually finished.\n\nThat rule is enforced in two places on purpose. The database holds what it can state declaratively: one vote per person per turn, and a winner that genuinely belongs to the turn being voted on (a composite foreign key). The \"two or more answered\" count lives in the vote transaction, which is safe because a response only ever moves PENDING → COMPLETE or PENDING → FAILED and never back — so the count can rise between check and write, never fall.\n\nSigning in is required; owning the thread is not. The whole point of a shareable arena link is that other people can weigh in.",
+      "item": [
+        {
+          "name": "Vote for the winner",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// See the Setup folder for why this picks a scope rather than always",
+                  "// writing to the collection.",
+                  "const save = (key, value) => (pm.environment.name",
+                  "    ? pm.environment.set(key, value)",
+                  "    : pm.collectionVariables.set(key, value));",
+                  "",
+                  "const vote = pm.response.json();",
+                  "if (vote && vote.voteId) {",
+                  "    save('voteId', vote.voteId);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"turnId\": \"{{turnId}}\",\n  \"modelResponseId\": \"{{modelResponseId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/votes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "votes"
+              ]
+            },
+            "description": "The happy path. Expect **201** with `voteId`, `turnId` and `modelResponseId`.\n\nRequires two of the turn's models to have finished streaming — run \"Send a prompt\" and \"Send the second model's prompt\" in the Chat folder first, or this returns 409."
+          },
+          "response": []
+        },
+        {
+          "name": "Vote again → 409",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"turnId\": \"{{turnId}}\",\n  \"modelResponseId\": \"{{modelResponseIdB}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/votes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "votes"
+              ]
+            },
+            "description": "Send this straight after the request above. Expect **409** — \"You've already voted on this prompt.\"\n\nOne vote per person per turn is a unique index in the database, not a check in code. That matters: two votes racing each other could both pass an application check, and only the constraint actually closes the window. Changing your mind is not supported by design — the leaderboard is built from honest first reactions."
+          },
+          "response": []
+        },
+        {
+          "name": "Only one model answered → 409",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"turnId\": \"{{soloTurnId}}\",\n  \"modelResponseId\": \"{{soloModelResponseId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/votes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "votes"
+              ]
+            },
+            "description": "Run \"Create a one-model turn\" first, and optionally stream its single answer. Expect **409** — \"You can only vote once at least two models have answered.\"\n\nThis is the rule the whole data model was shaped around: a vote is a comparison, and there is nothing to compare. It holds whether the second model is still pending, failed, or was never selected at all."
+          },
+          "response": []
+        },
+        {
+          "name": "Model still answering → 409",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"turnId\": \"{{turnId}}\",\n  \"modelResponseId\": \"{{pendingModelResponseId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/votes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "votes"
+              ]
+            },
+            "description": "Votes for the third model of the opening turn — the one deliberately left unstreamed. Expect **409**, \"That model hasn't finished answering yet.\"\n\nThe turn itself is votable (two others finished), so this is specifically about the chosen answer. The composite foreign key would accept this row happily — it only checks the response belongs to the turn — so the status check has to live in the transaction."
+          },
+          "response": []
+        },
+        {
+          "name": "Winner from another turn → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"turnId\": \"{{turnId}}\",\n  \"modelResponseId\": \"{{soloModelResponseId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/votes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "votes"
+              ]
+            },
+            "description": "A votable turn, and a real response id — from a different turn. Expect **400**, \"That answer isn't part of this prompt.\"\n\nThe transaction catches it first and answers plainly. Behind it, the database would refuse the write anyway: `Vote(modelResponseId, turnId)` is a composite foreign key onto `ModelResponse(id, turnId)`, so a mismatched pair cannot physically be stored. Belt and braces, deliberately — this is the one invariant that would silently corrupt the leaderboard if it ever slipped."
+          },
+          "response": []
+        },
+        {
+          "name": "Unknown turn → 404",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"turnId\": \"turn_that_does_not_exist\",\n  \"modelResponseId\": \"{{modelResponseId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/votes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "votes"
+              ]
+            },
+            "description": "Expect **404** and a plain sentence. Nothing is written."
+          },
+          "response": []
+        },
+        {
+          "name": "Malformed body → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"turnId\": \"\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/votes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "votes"
+              ]
+            },
+            "description": "Missing `modelResponseId` and an empty `turnId`. Expect **400** and the same plain sentence every malformed body gets. No detail about which field was wrong reaches the caller."
+          },
+          "response": []
+        },
+        {
+          "name": "Unauthenticated → 401",
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"turnId\": \"{{turnId}}\",\n  \"modelResponseId\": \"{{modelResponseId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/votes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "votes"
+              ]
+            },
+            "description": "Expect **401**. Reading a thread is open to everyone; voting is a write and needs a signed-in person, because a vote is attributed to one."
           },
           "response": []
         }

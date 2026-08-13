@@ -1,4 +1,3 @@
-import { auth } from "@clerk/nextjs/server";
 import { streamText } from "ai";
 
 import { createCallTimer } from "@/features/chat/call-metrics";
@@ -7,12 +6,16 @@ import {
   type ChatMessageMetadata,
   type ChatUIMessage,
 } from "@/features/chat/chat-request";
-import { chatModel } from "@/features/models/openrouter";
 import {
-  arcjetChat,
-  CHAT_TOKENS_PER_CALL,
-  refusalFor,
-} from "@/features/security/arcjet";
+  claimResponse,
+  completeResponse,
+  failResponse,
+  type ClaimFailure,
+} from "@/features/chat/persist-response";
+import { badRequest, plainly } from "@/features/http/plain-response";
+import { chatModel } from "@/features/models/openrouter";
+import { arcjetChat, CHAT_TOKENS_PER_CALL } from "@/features/security/arcjet";
+import { guard } from "@/features/security/guard";
 
 /**
  * One model, one request, one stream.
@@ -22,55 +25,56 @@ import {
  * plumbing on the client and buys the thing the product depends on: one model
  * being slow, rate-limited, or down cannot touch the other two answers.
  *
- * Not here yet, on purpose:
- * - Persisting the answer and its metrics needs the data model, feature 3.
- * - PostHog events and LLM analytics land with feature 6.
+ * Each call is handed a `modelResponseId` that `POST /api/turns` already
+ * created as PENDING, so three concurrent calls update three distinct rows and
+ * never race to create the turn they share.
+ *
+ * Not here yet, on purpose: PostHog events and LLM analytics land with feature 6.
  */
 
 /** Streaming to a free-tier model can outlast a platform's stingier default. */
 export const maxDuration = 60;
 
-const plainly = (sentence: string, status: number): Response =>
-  Response.json({ error: sentence }, { status });
+const refusalFor = (failure: ClaimFailure): Response => {
+  switch (failure.reason) {
+    case "not-found":
+      return plainly("That prompt doesn't exist.", 404);
+    case "not-yours":
+      return plainly("That conversation belongs to someone else.", 403);
+    case "already-answered":
+      return plainly("That model has already answered this prompt.", 409);
+  }
+};
 
 export async function POST(request: Request): Promise<Response> {
-  const { userId } = await auth();
-
-  if (userId === null) {
-    return plainly("You need to be signed in to send a prompt.", 401);
-  }
-
-  // Before the body is even read, and long before OpenRouter is called. The
-  // user id comes from Clerk on the server, never from the request, so the
-  // rate limit cannot be sidestepped by sending a different header.
-  const decision = await arcjetChat.protect(request, {
-    userId,
+  const guarded = await guard({
+    request,
+    client: arcjetChat,
     requested: CHAT_TOKENS_PER_CALL,
   });
 
-  if (decision.isDenied()) {
-    const refusal = refusalFor(decision);
-
-    return plainly(refusal.sentence, refusal.status);
-  }
-
-  if (decision.isErrored()) {
-    // Arcjet failed open. Log it and let the prompt through — the arena being
-    // down because its rate limiter is down would be the worse outcome.
-    console.error("[chat] arcjet could not decide", decision.reason);
+  if (!guarded.ok) {
+    return guarded.response;
   }
 
   const body: unknown = await request.json().catch(() => null);
   const parsed = chatRequestSchema.safeParse(body);
 
   if (!parsed.success) {
-    return plainly(
-      "That request didn't look right. Try sending it again.",
-      400,
-    );
+    return badRequest();
   }
 
-  const { modelId, messages } = parsed.data;
+  const { modelResponseId, messages } = parsed.data;
+
+  // Before the provider is called: the row must exist, belong to this caller's
+  // conversation, and still be unanswered. Anything else and no money is spent.
+  const claim = await claimResponse(guarded.userId, modelResponseId);
+
+  if (!claim.ok) {
+    return refusalFor(claim);
+  }
+
+  const { modelId } = claim;
   const timer = createCallTimer();
 
   const result = streamText({
@@ -86,22 +90,53 @@ export async function POST(request: Request): Promise<Response> {
         timer.markContentChunk();
       }
     },
-    onError: ({ error }) => {
+    onFinish: async ({ text, totalUsage }) => {
+      // The same numbers the stream reports to the browser, written down. If
+      // this throws the user has already had their answer, so it is logged
+      // rather than surfaced — a lost row is better than a broken stream.
+      try {
+        await completeResponse(
+          modelResponseId,
+          text,
+          timer.read(totalUsage.outputTokens),
+          {
+            inputTokens: totalUsage.inputTokens,
+            totalTokens: totalUsage.totalTokens,
+          },
+        );
+      } catch (error) {
+        console.error(
+          `[chat] could not persist response ${modelResponseId}`,
+          error,
+        );
+      }
+    },
+    onError: async ({ error }) => {
       // The user gets a plain sentence; the detail belongs in the server log.
       console.error(`[chat] model ${modelId} failed`, error);
+
+      try {
+        await failResponse(modelResponseId);
+      } catch (persistError) {
+        console.error(
+          `[chat] could not mark response ${modelResponseId} failed`,
+          persistError,
+        );
+      }
     },
   });
 
   return result.toUIMessageStreamResponse<ChatUIMessage>({
     messageMetadata: ({ part }): ChatMessageMetadata | undefined => {
       if (part.type === "start") {
-        return { modelId };
+        return { modelId, modelResponseId };
       }
 
       if (part.type === "finish") {
         const metrics = timer.read(part.totalUsage.outputTokens);
         return {
           modelId,
+          modelResponseId,
           timeToFirstTokenMs: metrics.timeToFirstTokenMs,
           tokensPerSecond: metrics.tokensPerSecond,
           outputTokens: metrics.outputTokens,
