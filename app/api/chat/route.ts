@@ -64,7 +64,10 @@ export async function POST(request: Request): Promise<Response> {
   const parsed = chatRequestSchema.safeParse(body);
 
   if (!parsed.success) {
-    return plainly("That request didn't look right. Try sending it again.", 400);
+    return plainly(
+      "That request didn't look right. Try sending it again.",
+      400,
+    );
   }
 
   const { modelId, messages } = parsed.data;

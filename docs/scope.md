@@ -19,7 +19,7 @@ There are rough hand-drawn sketches for the arena screen, the leaderboard, and t
 | #   | Feature                                     | Phase      | Status      |
 | --- | ------------------------------------------- | ---------- | ----------- |
 | 1   | Connecting to a model                       | Foundation | done        |
-| 2   | Coding standards & tooling                  | Foundation | not started |
+| 2   | Coding standards & tooling                  | Foundation | done        |
 | 3   | Data model                                  | Foundation | in progress |
 | 4   | Design & look                               | Foundation | not started |
 | 5   | Model picker                                | Slice 1    | not started |
@@ -85,7 +85,7 @@ upstream rate-limit, not a simulated one.
   real and still has to be solved — it is written down in feature 3 below so it
   does not get lost. Feature 1 ships the streaming path only, stateless.
 - **Tokens per second was measured wrongly at first,** and reported rates like
-  22,000 tokens/sec. Cause: the clock started at the first *text* token, but
+  22,000 tokens/sec. Cause: the clock started at the first _text_ token, but
   several free models are reasoning models that think for seconds first, and
   the provider counts those reasoning tokens in `outputTokens`. A full token
   count was being divided by a partial window. The clock now starts at the
@@ -93,7 +93,7 @@ upstream rate-limit, not a simulated one.
   chunk reports no rate at all rather than an invented one — there is genuinely
   nothing to measure there.
 - **The model id was accepted unchecked,** as any nonempty string, and passed
-  straight to OpenRouter. A signed-in caller could therefore post a *paid* model
+  straight to OpenRouter. A signed-in caller could therefore post a _paid_ model
   id and spend this app's credits on a model outside the free-tier catalog the
   arena is built around. Fixed by `features/models/model-id.ts`: an id must now
   match `author/slug:free`, the suffix OpenRouter uses to mark the free variant,
@@ -130,8 +130,126 @@ Real free models over a running dev server, no test runner:
 
 Write down the real conventions for this project once it actually exists, then install linting, formatting, and a pre-commit hook that actually enforces them.
 
-- [ ] Decide the approach
-- [ ] Install lint, format, and whatever else is needed, and write it up in a coding-standards doc
+- [x] Decide the approach
+- [x] Install lint, format, and whatever else is needed, and write it up in a coding-standards doc
+
+#### What was decided
+
+The conventions themselves live in [docs/coding-standards.md](./coding-standards.md),
+which is the document someone actually reads. This section records why the
+tooling around them is shaped the way it is.
+
+**Prettier for formatting, ESLint for correctness, no overlap.** Biome was the
+real alternative — one tool instead of two, and faster. It was rejected because
+`eslint-config-next` carries Next 16's own rules and Biome has no equivalent for
+them. Giving those up to save a second of lint time is a bad trade on a project
+this size. No stylistic ESLint rules exist as a result; formatting is not a
+thing anyone argues about here.
+
+**ESLint rules mirror `CLAUDE.md` one-for-one, and nothing else.** Not a large
+community preset. Every rule in `eslint.config.mjs` maps to a written rule: `any`
+is an error rather than the Next preset's warning, `prefer-const` / `no-var` /
+`no-param-reassign` hold the immutability line, and two `no-restricted-imports`
+groups make folder-by-feature enforced rather than aspirational — a relative
+import climbing into another feature fails, and so does reaching into another
+feature's subfolder. Importing `@/prisma/generated/*` directly is also an error,
+which is specifically what stops the duplicate Prisma client that had to be
+deleted during the 2026-08-12 verification run from coming back.
+
+**`eslint-plugin-functional` was deliberately left out**, even though the
+functional-style rule is real. It fights React hooks and the Prisma client hard
+enough that it would be switched off within a week, and a rule everyone disables
+is worse than a written convention everyone reads. `map`/`filter`/`reduce` over
+mutating loops, and `readonly` where it belongs, are held by review.
+
+**`console.log` is a lint error**, `console.error` and `console.warn` are not.
+This is a server that logs provider failures while showing the user a plain
+sentence, and the way detail goes missing is logging an error at info level.
+Root-level config files are exempt.
+
+**`noUncheckedIndexedAccess` is on.** Indexing produces `T | undefined`, which is
+the truth in an app made of streamed chunks and provider usage objects. It
+turned up zero existing errors, so it cost nothing to adopt now and would have
+cost real work later.
+
+**Hooks are split by speed.** Pre-commit runs `lint-staged` — `eslint --fix` then
+`prettier --write`, staged files only, well under a second. Pre-push runs the
+whole `pnpm check`. A type error genuinely cannot be caught from staged files
+alone, since changing one file can break the type of another that was not
+staged, so that check has to be whole-project and therefore has to be rarer. The
+alternative, typecheck on every commit, was considered and rejected: several
+seconds per commit is exactly how a hook earns a habit of `--no-verify`.
+
+**`pnpm check` is the single command** — `format:check`, then `lint`, then
+`typecheck`. `pnpm build` stays out of it on purpose; folding a full Next build
+in would make the cheap gate expensive enough that people stop running it.
+
+#### Found while building
+
+- **`core.autocrlf=true` with no `.gitattributes` was a live trap.** Git's
+  Windows default checks every file out as CRLF while Prettier writes LF, so a
+  fresh clone would fail `pnpm format:check` on every file in the repo — which
+  reads as a broken tool and is really a line-ending mismatch. Fixed by adding
+  `.gitattributes` with `* text=auto eol=lf`. Not part of the original plan;
+  found because the first format pass produced CRLF warnings on 25 files.
+- **The first format pass reformatted things it had no business touching** —
+  the vendored agent skills under `.claude/skills/` and `.agents/skills/`, whose
+  upstream hashes are recorded in `skills-lock.json` and which would have read as
+  locally modified forever after, and the Excalidraw sketches in
+  `docs/ui-sketch/`, whose markdown encoding Excalidraw owns. Both are now in
+  `.prettierignore` with the reason written next to them. `AGENTS.md` is ignored
+  too, since `next dev` rewrites it.
+
+#### Corrected in review
+
+The feature-boundary rules were reviewed and only about half enforced what they
+claimed. A comment flagged that `@/features/<other>/internal/helper` slipped
+through; that specific case turned out to fire correctly, but probing every
+combination rather than only the one raised found four real holes:
+
+- **A later config object replaces `no-restricted-imports`, it does not merge
+  with it.** The per-feature blocks listed only their own patterns, so every file
+  under `features/` silently lost the project-wide rules — the climb-out ban and
+  the generated-Prisma-client ban did not apply to the code most likely to break
+  them. The shared patterns are now spliced into each per-feature block on
+  purpose, with a comment saying why.
+- **A sibling feature reached relatively was caught by nothing.**
+  `../models/openrouter` from inside `features/chat` crosses a feature boundary
+  without looking like it climbs out.
+- **Climb-out patterns were listed at two depths only**, so `../features/...`
+  from `app/` passed. Depths are now spelled out 1 through 4, deliberately not
+  written as one glob with a leading `**` — that would also match the
+  `@/features/...` form the rule exists to push people toward.
+- **`@/prisma/generated/*` missed nested paths**, now `@/prisma/generated/**`.
+  Tightening it immediately caught `features/database/prisma.ts` itself, which is
+  the one file that legitimately constructs the client, so it is exempted by
+  name — an exemption that only became necessary once the merge bug above was
+  fixed and the rule started applying there at all.
+
+#### Verified by hand
+
+No test runner, as decided:
+
+- A probe file containing `any`, an unused variable, and `console.log` was
+  linted: all three rules fired with the intended messages. File deleted.
+- A probe matrix of fifteen import specifiers across `app/`, a feature root, and
+  a folder one level inside a feature: all ten that should be rejected fired
+  with the intended message, and the five legitimate ones — a top-level import
+  of another feature through `@/`, two same-folder imports, an intra-feature
+  climb, and `features/database/prisma.ts` importing the generated client —
+  stayed clean. A sibling file in that same folder importing the generated
+  client still fails, so the exemption is scoped to the one file rather than the
+  folder. Probes deleted.
+- That same file staged and committed: the pre-commit hook **rejected** the
+  commit and restored the working tree untouched.
+- A formatting-only file staged and committed: the hook **fixed and committed the
+  formatted version** — `git show` confirmed the committed content was the
+  reformatted one, not what was staged. Probe commit removed afterwards.
+- `pnpm check` (format, lint, typecheck) and `pnpm build` both clean.
+
+- Pre-push fired on the real `git push` that opened the pull request for this
+  work: the full `pnpm check` ran ahead of the upload, and the push only
+  completed after it passed.
 
 ### 3. Data model
 
@@ -293,8 +411,8 @@ Dev server, real Clerk session token minted off the Backend API, no test runner:
 - The 429 body reads "You've sent a lot of prompts in a short time. Try again in
   55 seconds." — a real number off the decision, not a guess.
 - Waited a minute, sent again → allowed. The bucket genuinely refills.
-- `python-requests/2.31.0` and `Scrapy/2.11` User-Agents → 403, *while the bucket
-  was already empty*, confirming bot detection is evaluated before the rate limit.
+- `python-requests/2.31.0` and `Scrapy/2.11` User-Agents → 403, _while the bucket
+  was already empty_, confirming bot detection is evaluated before the rate limit.
 - curl itself was allowed throughout, which is what made all of the above
   testable.
 - Decisions confirmed recorded in the Arcjet platform via
@@ -349,11 +467,11 @@ is gone.
 Three real free models, authenticated with a real Clerk session token minted off
 the Backend API, same prompt to each:
 
-| Model | TTFT | Tokens/sec | Output tokens | Total |
-| --- | --- | --- | --- | --- |
-| `inclusionai/ling-3.0-tiny:free` | 1314ms | 421.2 | 342 | 2126ms |
-| `nvidia/nemotron-3.5-lightning:free` | 678ms | 134.5 | 804 | 6657ms |
-| `google/gemma-4-26b-a4b-it:free` | — | — | — | failed, see below |
+| Model                                | TTFT   | Tokens/sec | Output tokens | Total             |
+| ------------------------------------ | ------ | ---------- | ------------- | ----------------- |
+| `inclusionai/ling-3.0-tiny:free`     | 1314ms | 421.2      | 342           | 2126ms            |
+| `nvidia/nemotron-3.5-lightning:free` | 678ms  | 134.5      | 804           | 6657ms            |
+| `google/gemma-4-26b-a4b-it:free`     | —      | —          | —             | failed, see below |
 
 Plausible, clearly different per model, and the numbers arrive on the `finish`
 metadata frame exactly as the collection describes. The tokens/sec correction
@@ -388,7 +506,7 @@ Two behaviours turned up that the earlier Arcjet verification did not record,
 and both change how this endpoint has to be tested from now on.
 
 **Bot detection is sticky, and it poisons a rate-limit test.** After the two
-spoofed bot User-Agents were denied, *every* subsequent request from the same
+spoofed bot User-Agents were denied, _every_ subsequent request from the same
 client — plain curl, no spoofing — came back `CONCLUSION_DENY` /
 `REASON_BOT_V2` for roughly two to three minutes before decaying back to allow.
 `BOT_V2` is evidently doing client reputation, not just User-Agent matching. A

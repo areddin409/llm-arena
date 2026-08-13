@@ -1,0 +1,21 @@
+# Normalize line endings to LF in the repo and on checkout.
+#
+# Without this, Git's core.autocrlf=true (the Windows default) checks every file
+# out as CRLF, while Prettier writes LF. `pnpm format:check` would then fail on
+# every file in the repo on a fresh clone, which looks like a broken tool and is
+# really just a line-ending mismatch.
+* text=auto eol=lf
+
+# Binary — never touch these.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.pdf binary
+
+# Generated; collapse in diffs and don't count toward language stats.
+pnpm-lock.yaml linguist-generated=true -diff

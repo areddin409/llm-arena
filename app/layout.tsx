@@ -25,7 +25,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">
+      <body className="flex min-h-full flex-col">
         <ClerkProvider>
           <header className="flex items-center justify-between gap-4 px-6 py-4">
             <span className="text-sm font-semibold tracking-tight">
