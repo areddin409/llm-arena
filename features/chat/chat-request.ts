@@ -29,6 +29,35 @@ export const chatRequestSchema = z.object({
 
 export type ChatRequest = Readonly<z.infer<typeof chatRequestSchema>>;
 
+export type ChatMessage = ChatRequest["messages"][number];
+
+/**
+ * The messages a caller sends must actually end in the prompt the turn recorded.
+ *
+ * The turn stores one canonical prompt and every metric, vote and leaderboard row
+ * is attributed to it — but the text the model receives comes from the request
+ * body. Nothing used to tie the two together, so a caller could hold a legitimate
+ * pending response id and send entirely different text: the model would answer
+ * that, and the answer plus its speed numbers would be filed under a prompt the
+ * model never saw. That is a quiet corruption of exactly the data this app exists
+ * to collect.
+ *
+ * Only the final user message is checked. Earlier turns are history the client
+ * legitimately owns and replays — each model carries its own separate
+ * conversation, so the server cannot reconstruct it — but the question being
+ * asked right now is the turn's, and it has to match.
+ */
+export const endsWithPrompt = (
+  messages: readonly ChatMessage[],
+  prompt: string,
+): boolean => {
+  const lastUserMessage = messages.findLast(
+    (message) => message.role === "user",
+  );
+
+  return lastUserMessage?.content === prompt;
+};
+
 /**
  * Metadata sent down the stream alongside the text. `start` carries the model
  * id so a client rendering three streams can tell them apart; `finish` carries

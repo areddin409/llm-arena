@@ -99,6 +99,10 @@
     {
       "key": "otherUsersModelResponseId",
       "value": ""
+    },
+    {
+      "key": "unknownModelResponseId",
+      "value": ""
     }
   ],
   "item": [
@@ -924,6 +928,39 @@
           "response": []
         },
         {
+          "name": "Messages that aren't the turn's prompt → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"modelResponseId\": \"{{modelResponseId}}\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Something the turn never asked.\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chat",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "chat"
+              ]
+            },
+            "description": "A legitimate pending response id, with text that is not what the turn recorded. Expect **400**, and no model is called.\n\nThe turn stores one canonical prompt, and every metric, vote and leaderboard row is attributed to it — but the text the model sees comes from this body. Nothing used to tie the two together, so an answer and its speed numbers could be filed under a prompt the model never received. That is a quiet corruption of exactly the data this app exists to collect.\n\nOnly the final user message is checked. Earlier turns are history the client legitimately owns and replays, since each model carries its own separate conversation and the server cannot reconstruct it.\n\nThe reservation is handed back as PENDING, not FAILED — nothing was attempted and no model misbehaved, so the row must look untouched afterwards."
+          },
+          "response": []
+        },
+        {
           "name": "Unknown response id → 404",
           "request": {
             "method": "POST",
@@ -985,7 +1022,73 @@
                 "chat"
               ]
             },
-            "description": "Send \"Send a prompt\" first, let it finish, then send this. Expect **409**, \"That model has already answered this prompt.\"\n\nPENDING is the only claimable state. Without that, a completed row could be re-run indefinitely — each run costing a real upstream call and overwriting a real measurement with a new one, which would quietly corrupt the leaderboard's speed numbers."
+            "description": "Send \"Send a prompt\" first, let it finish, then send this. Expect **409**, \"That model has already answered this prompt.\"\n\nCOMPLETE is the one status a row can never leave. Without that a finished row could be re-run indefinitely, each run spending a real upstream call and overwriting a real measurement — and the vote rule depends on the count of completed answers never falling."
+          },
+          "response": []
+        },
+        {
+          "name": "Same row, twice at once → 409",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"modelResponseId\": \"{{modelResponseId}}\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Write two sentences about the color rust.\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chat",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "chat"
+              ]
+            },
+            "description": "Fire this at a PENDING row while another copy of the same request is still streaming — two Postman tabs, or the Runner.\n\nExpect the second one to return **409**, \"That model is already answering this prompt.\"\n\nClaiming a row is a conditional update, not a read-then-check, so exactly one caller can win it. Before that fix both callers read PENDING, both spent an upstream call, and the slower one silently overwrote the faster one's answer and metrics.\n\nA reservation expires after two minutes — comfortably past the route's own 60s `maxDuration` — so a stream that dies mid-flight cannot lock the row forever."
+          },
+          "response": []
+        },
+        {
+          "name": "Retry a failed model → streams",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"modelResponseId\": \"{{modelResponseId}}\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Write two sentences about the color rust.\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chat",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "chat"
+              ]
+            },
+            "description": "Send this once a response row has ended up FAILED. Free models are rate-limited upstream constantly, so waiting for a real one rarely takes long.\n\nExpect it to be **accepted and stream normally**. FAILED is deliberately not terminal: a transient provider error costing a model its slot in a turn permanently would make the arena's comparison less honest, not more. COMPLETE is the only status that closes a row for good."
           },
           "response": []
         },
@@ -1104,7 +1207,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"modelId\": \"not-a-real/model:free\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Hello.\"\n    }\n  ]\n}",
+              "raw": "{\n  \"modelResponseId\": \"{{unknownModelResponseId}}\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Write two sentences about the color rust.\"\n    }\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1121,7 +1224,7 @@
                 "chat"
               ]
             },
-            "description": "Create a turn using a well-formed `:free` id that no longer exists on OpenRouter, then stream it with this request.\n\nThe id passes the shape check — that check cannot know which ids are real, since the live catalog is feature 5 — so the failure happens at call time and is handled: the stream carries \"That model didn't answer. You can try it again.\", the row is marked FAILED, and the full provider exception goes to the server log only. That split is the rule, not an accident."
+            "description": "Exercises the real provider-failure path, not validation.\n\n**Setup:** create a turn whose model is a well-formed `:free` id that no longer exists on OpenRouter — `ghost/model-that-never-was:free` works — and save the response id it returns as `unknownModelResponseId`. The id passes the shape check, because that check cannot know which ids are real (the live catalog is feature 5), so the failure happens at call time.\n\nExpect **200**, with the stream carrying `\"type\":\"error\"` and \"That model didn't answer. You can try it again.\" Never the provider exception, which goes to the server log alone. The row is marked FAILED — and can be retried, see below.\n\nThis request previously still sent the old `modelId` field and no `modelResponseId`, so it only ever hit malformed-body validation and had silently stopped testing the thing it is named after."
           },
           "response": []
         }

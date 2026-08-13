@@ -424,6 +424,89 @@ means, and "30" would stop being "ten three-model prompts".
   surfacing as a server error is the wrong answer to what is plainly a bad
   request. Caught in the Zod schema now and reported as a 400.
 
+#### Corrected in review
+
+Four findings, all valid, all fixed. Two of them shared a root cause: there was
+no way for a call to _reserve_ a response row, only to check it.
+
+- **Claiming a response was not atomic.** `claimResponse` read the row, saw
+  PENDING, and then called the provider. Two overlapping requests for the same
+  owned id both passed that check, both spent an upstream call, and both wrote an
+  answer — the slower one silently overwriting the faster one's content and
+  metrics. Nothing in the old code reserved anything; the terminal writes updated
+  by row id alone. Fixed by making the status check a conditional update rather
+  than a read: `updateMany` moves the row to a new `STREAMING` status, and
+  `count` decides the winner. Exactly one concurrent caller can match. Terminal
+  writes are also conditioned on the reservation still being the caller's, using
+  `startedAt` as the lease's identity, so a call whose reservation expired cannot
+  come back and clobber whoever took over.
+- **A failed response could never be retried.** FAILED was terminal, so a
+  transient upstream rate-limit — which free models produce constantly — cost that
+  model its slot in the turn permanently, while the UI advertised a retry that
+  could only ever return 409. FAILED is now claimable again. COMPLETE stays
+  terminal, which is the part that matters: the vote rule's safety argument
+  depends on the count of completed answers never falling, and nothing ever
+  leaves COMPLETE. The "status only moves one way" note written above during the
+  build was too strong, and has been corrected here and in the schema rather than
+  left to mislead.
+- **Reservations expire.** Introducing STREAMING introduced a way to strand a
+  row: a stream killed mid-flight never reaches `onFinish` or `onError`, and
+  without an expiry that row would sit reserved forever, unanswerable and
+  unretryable. A reservation is honoured for 120s — comfortably past the route's
+  own 60s `maxDuration`, so a slow-but-alive call is never stolen from under
+  itself — after which another call may take it over.
+- **Messages bypassed the stored prompt.** A caller holding a legitimate pending
+  response id could send entirely different text. The model answered _that_, and
+  the answer plus its speed numbers were then filed under the turn's canonical
+  prompt — a quiet corruption of exactly the data this app exists to collect.
+  The route now requires the final user message to equal the turn's prompt.
+  Earlier messages are not checked and should not be: each model carries its own
+  separate conversation, which the client legitimately owns and replays, and the
+  server cannot reconstruct it. A rejection releases the reservation back to
+  PENDING rather than FAILED — nothing was attempted, so the row must look
+  untouched.
+- **The collection's "Unknown model" request had gone stale.** It still sent the
+  old `modelId` field and omitted the now-required `modelResponseId`, so it was
+  exercising body validation while claiming to exercise the provider-failure
+  path. Exactly the way a collection starts lying about the API. Fixed, and three
+  requests added for the behaviour above: the concurrent-claim 409, the retry of a
+  FAILED row, and the prompt-mismatch 400.
+
+#### Also fixed: the cold start, properly
+
+The raised `maxWait` recorded above was the wrong shape of fix on its own. It
+stopped the 500 but left the first prompt after every deploy waiting eleven
+seconds for a TLS handshake, and it turned out not even to be reliable — a
+client regenerated mid-session blew through 15s and returned a 500 again.
+`instrumentation.ts` now opens the first connection at boot, before the server
+accepts a request, so nobody ever pays for it. It is deliberately not fatal: a
+database briefly unreachable at boot should not stop the server from serving the
+pages that do not need it. `TRANSACTION_OPTIONS` keeps the raised timeout as a
+backstop for when the warm-up was itself too slow or failed.
+
+#### The fixes, verified by hand
+
+Against the running dev server and the real database, all green:
+
+- **Two genuinely simultaneous requests** for the same PENDING row, fired in
+  parallel: one 200, one 409 "That model is already answering this prompt." The
+  row afterwards holds exactly one answer.
+- **A mismatched prompt** → 400, and the row reads PENDING with no reservation
+  afterwards — released, not failed.
+- **Re-answering a COMPLETE row** → 409. Still closed for good.
+- **A genuinely nonexistent model** (`ghost/model-that-never-was:free`, which
+  passes the `:free` shape check and cannot exist) → the stream carried only
+  "That model didn't answer. You can try it again.", the row read FAILED, and
+  nothing matching `openrouter`, `APICallError` or `RetryError` appeared anywhere
+  in the response.
+- **Retrying that FAILED row** → accepted and streamed. It fails again, being a
+  fake model, but it is no longer locked out.
+- **The first request after a cold boot** → 201, no timeout, with the warm-up in
+  place.
+
+The full 21-check route suite was re-run afterwards and still passes, so none of
+this regressed the turn, vote, or streaming paths.
+
 #### An unresolved contradiction, flagged not resolved
 
 `CLAUDE.md` says cost will always read $0.0000 and to **show it anyway**, since

@@ -23,13 +23,23 @@ datasource db {
   provider = "postgresql"
 }
 
-/// PENDING is written when a turn is created; the streaming call that owns the
-/// row moves it to COMPLETE or FAILED exactly once and never back. That the
-/// transition is one-way is load-bearing — the "a vote needs two or more
-/// answers" rule counts COMPLETE rows in application code, and a monotonically
-/// increasing count is what makes that check safe to do outside the database.
+/// PENDING when a turn is created. A streaming call reserves the row by moving
+/// it to STREAMING, then finishes it as COMPLETE or FAILED.
+///
+/// STREAMING exists for concurrency, not for the UI — in-flight state in the
+/// browser is still the browser's business. It is the reservation that stops two
+/// overlapping requests for the same row from both calling the provider and both
+/// writing an answer. The move into it is a conditional update, so exactly one
+/// caller can win it.
+///
+/// FAILED is not terminal: a model that failed on a transient provider error can
+/// be retried, which moves the row back to STREAMING. COMPLETE *is* terminal, and
+/// that is the part the vote rule leans on. The "a vote needs two or more
+/// answers" check counts COMPLETE rows in application code, and it is safe there
+/// because nothing ever leaves COMPLETE — so the count can only rise, never fall.
 enum ResponseStatus {
   PENDING
+  STREAMING
   COMPLETE
   FAILED
 }
@@ -124,7 +134,14 @@ model ModelResponse {
   /// token count beside it could never be audited.
   costUsd            Decimal @default(0) @db.Decimal(12, 6)
 
-  createdAt   DateTime  @default(now())
+  createdAt DateTime @default(now())
+  /// Set when a call reserves this row, and doubles as the reservation's
+  /// identity: a terminal write only lands if this is still the exact timestamp
+  /// that caller set, so a request whose lease was reclaimed as stale cannot
+  /// come back and overwrite whoever took over. Also what makes a reservation
+  /// expirable — a stream killed mid-flight would otherwise lock the row into
+  /// STREAMING forever, with no way to retry it.
+  startedAt   DateTime?
   completedAt DateTime?
 
   turn  Turn   @relation(fields: [turnId], references: [id], onDelete: Cascade)

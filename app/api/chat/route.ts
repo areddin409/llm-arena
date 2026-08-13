@@ -3,6 +3,7 @@ import { streamText } from "ai";
 import { createCallTimer } from "@/features/chat/call-metrics";
 import {
   chatRequestSchema,
+  endsWithPrompt,
   type ChatMessageMetadata,
   type ChatUIMessage,
 } from "@/features/chat/chat-request";
@@ -10,6 +11,7 @@ import {
   claimResponse,
   completeResponse,
   failResponse,
+  releaseResponse,
   type ClaimFailure,
 } from "@/features/chat/persist-response";
 import { badRequest, plainly } from "@/features/http/plain-response";
@@ -43,6 +45,8 @@ const refusalFor = (failure: ClaimFailure): Response => {
       return plainly("That conversation belongs to someone else.", 403);
     case "already-answered":
       return plainly("That model has already answered this prompt.", 409);
+    case "in-progress":
+      return plainly("That model is already answering this prompt.", 409);
   }
 };
 
@@ -67,14 +71,25 @@ export async function POST(request: Request): Promise<Response> {
   const { modelResponseId, messages } = parsed.data;
 
   // Before the provider is called: the row must exist, belong to this caller's
-  // conversation, and still be unanswered. Anything else and no money is spent.
+  // conversation, and be claimable. The claim reserves it atomically, so two
+  // overlapping requests for the same row cannot both reach a model.
   const claim = await claimResponse(guarded.userId, modelResponseId);
 
   if (!claim.ok) {
     return refusalFor(claim);
   }
 
-  const { modelId } = claim;
+  const { modelId, startedAt } = claim;
+
+  // The answer is filed under the turn's prompt, so it has to be an answer to
+  // the turn's prompt. Released back to PENDING rather than left reserved — the
+  // caller did nothing that should cost this model its slot.
+  if (!endsWithPrompt(messages, claim.prompt)) {
+    await releaseResponse(modelResponseId, startedAt);
+
+    return badRequest();
+  }
+
   const timer = createCallTimer();
 
   const result = streamText({
@@ -95,8 +110,9 @@ export async function POST(request: Request): Promise<Response> {
       // this throws the user has already had their answer, so it is logged
       // rather than surfaced — a lost row is better than a broken stream.
       try {
-        await completeResponse(
+        const written = await completeResponse(
           modelResponseId,
+          startedAt,
           text,
           timer.read(totalUsage.outputTokens),
           {
@@ -104,6 +120,15 @@ export async function POST(request: Request): Promise<Response> {
             totalTokens: totalUsage.totalTokens,
           },
         );
+
+        if (!written) {
+          // Our reservation expired and someone else took the row over. Dropping
+          // this write is the correct outcome; it is logged because it means a
+          // call ran long enough to lose its lease, which is worth knowing.
+          console.warn(
+            `[chat] reservation lost, discarded answer for ${modelResponseId}`,
+          );
+        }
       } catch (error) {
         console.error(
           `[chat] could not persist response ${modelResponseId}`,
@@ -116,7 +141,7 @@ export async function POST(request: Request): Promise<Response> {
       console.error(`[chat] model ${modelId} failed`, error);
 
       try {
-        await failResponse(modelResponseId);
+        await failResponse(modelResponseId, startedAt);
       } catch (persistError) {
         console.error(
           `[chat] could not mark response ${modelResponseId} failed`,
