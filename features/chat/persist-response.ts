@@ -33,7 +33,9 @@ export type ClaimSuccess = {
    */
   readonly modelId: string;
   readonly turnId: string;
-  /** The turn's canonical prompt, for checking what the caller actually sent. */
+  /** Everything needed to rebuild this model's conversation server-side. */
+  readonly threadId: string;
+  readonly turnIndex: number;
   readonly prompt: string;
   /**
    * This reservation's identity. Terminal writes carry it back so a caller whose
@@ -129,7 +131,11 @@ export const claimResponse = async (
 
   const claimedRow = await prisma.modelResponse.findUnique({
     where: { id: modelResponseId },
-    select: { modelId: true, turnId: true, turn: { select: { prompt: true } } },
+    select: {
+      modelId: true,
+      turnId: true,
+      turn: { select: { prompt: true, index: true, threadId: true } },
+    },
   });
 
   if (claimedRow === null) {
@@ -142,6 +148,8 @@ export const claimResponse = async (
     ok: true,
     modelId: claimedRow.modelId,
     turnId: claimedRow.turnId,
+    threadId: claimedRow.turn.threadId,
+    turnIndex: claimedRow.turn.index,
     prompt: claimedRow.turn.prompt,
     startedAt,
   };

@@ -3,10 +3,10 @@ import { streamText } from "ai";
 import { createCallTimer } from "@/features/chat/call-metrics";
 import {
   chatRequestSchema,
-  endsWithPrompt,
   type ChatMessageMetadata,
   type ChatUIMessage,
 } from "@/features/chat/chat-request";
+import { buildConversation } from "@/features/chat/conversation";
 import {
   claimResponse,
   completeResponse,
@@ -68,7 +68,7 @@ export async function POST(request: Request): Promise<Response> {
     return badRequest();
   }
 
-  const { modelResponseId, messages } = parsed.data;
+  const { modelResponseId } = parsed.data;
 
   // Before the provider is called: the row must exist, belong to this caller's
   // conversation, and be claimable. The claim reserves it atomically, so two
@@ -81,13 +81,29 @@ export async function POST(request: Request): Promise<Response> {
 
   const { modelId, startedAt } = claim;
 
-  // The answer is filed under the turn's prompt, so it has to be an answer to
-  // the turn's prompt. Released back to PENDING rather than left reserved — the
-  // caller did nothing that should cost this model its slot.
-  if (!endsWithPrompt(messages, claim.prompt)) {
+  // Assembled from the thread, not from the request. What the model receives is
+  // therefore exactly what the answer will be stored against, by construction
+  // rather than by a check the next caller finds a way around.
+  const messages = await buildConversation(
+    claim.threadId,
+    claim.turnIndex,
+    modelId,
+    claim.prompt,
+  ).catch((error: unknown) => {
+    console.error(
+      `[chat] could not rebuild the conversation for ${modelResponseId}`,
+      error,
+    );
+
+    return null;
+  });
+
+  if (messages === null) {
+    // Hand the reservation straight back rather than letting it sit until the
+    // 120s expiry. Nothing was attempted, and the person can retry now.
     await releaseResponse(modelResponseId, startedAt);
 
-    return badRequest();
+    return plainly("Something went wrong. You can try that again.", 500);
   }
 
   const timer = createCallTimer();

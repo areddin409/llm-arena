@@ -477,6 +477,38 @@ no way for a call to _reserve_ a response row, only to check it.
   rather than the last user message: the conversation has to _end_ on the turn's
   prompt. That costs nothing, because a genuine turn always ends on the question
   being asked, and it was verified not to break a real follow-up.
+- **And even that was still bypassable, which is what finally settled the
+  shape.** With the prompt required to be the last message, a caller could still
+  put entirely fabricated history in front of it — invented earlier questions,
+  invented earlier answers — and all of it reached the model and shaped the
+  answer, which was then stored against the canonical turn. There is no
+  validating that away: the whole array is the caller's invention, so there is
+  nothing to check it against.
+
+  Except there is, and it had been sitting in this feature's own schema the whole
+  time. `Turn.index`, `Turn.prompt` and `ModelResponse.content` **are** a
+  per-model transcript — the "each model's own conversation is the thread's turns
+  in index order" line written at the top of this feature is a description of a
+  query. The comment justifying client-supplied history said "the server cannot
+  reconstruct it", and that was simply false by the time it was written.
+
+  So `/api/chat` stopped accepting history. `features/chat/conversation.ts`
+  rebuilds it: every earlier turn's prompt paired with _this_ model's COMPLETE
+  answer to it, in order, then the current turn's prompt. The body is now a
+  `modelResponseId` and nothing else, and it is `.strict()`, so a stale client
+  still posting `messages` gets a plain 400 rather than having its history
+  silently ignored — which would look like the server obeying it.
+
+  The pattern is worth keeping in mind, because four rounds of review found the
+  same bug four times: the model id could point at another row, then the prompt
+  could differ from the turn's, then the prompt could be right but followed by a
+  steering assistant turn, then the prompt could be right and last with invented
+  history in front. Each fix validated one more field and the next probe found
+  the next field. What ended it was not a better check but deleting the input —
+  nothing from the browser is trusted now because nothing needs to be sent. When
+  a validation rule needs tightening for the third time, the question is probably
+  whether the field should exist.
+
 - **The collection's "Unknown model" request had gone stale.** It still sent the
   old `modelId` field and omitted the now-required `modelResponseId`, so it was
   exercising body validation while claiming to exercise the provider-failure
@@ -505,10 +537,16 @@ Against the running dev server and the real database, all green:
   row afterwards holds exactly one answer.
 - **A mismatched prompt** → 400, and the row reads PENDING with no reservation
   afterwards — released, not failed.
-- **The turn's real prompt followed by a trailing assistant turn** → 400, row
-  released. And the check that closes it does not break a genuine follow-up:
-  history, an assistant reply, and the new prompt last still streams to 200 and
-  stores a complete answer.
+- **History is genuinely rebuilt server-side, proven by a model's own memory.**
+  Turn 1: "My favorite color is burnt orange. Reply with just the word: noted."
+  → the row stored `"noted"`. Turn 2, in the same thread, sending **no history
+  at all**, only a response id: "What is my favorite color?" → the model answered
+  `"burnt orange"`. It could only know that from the transcript the server
+  assembled and sent, which is the whole claim, demonstrated rather than
+  asserted.
+- **A body carrying `messages`** — fabricated earlier questions and answers with
+  the turn's genuine prompt last, the exact shape that defeated every previous
+  version of the check → **400**, refused before anything else happens.
 - **Re-answering a COMPLETE row** → 409. Still closed for good.
 - **A genuinely nonexistent model** (`ghost/model-that-never-was:free`, which
   passes the `:free` shape check and cannot exist) → the stream carried only

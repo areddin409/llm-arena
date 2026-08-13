@@ -7,63 +7,30 @@ import { z } from "zod";
  * that is what lets a single model be slow, or fail outright, without taking
  * the other answers down with it.
  *
- * Which model that is no longer travels in the body. `POST /api/turns` creates a
- * PENDING `ModelResponse` per selected model and validated each id against the
- * free-tier shape when it did; this request names the row, and the server reads
- * the model id back off it. That closes a gap the old shape left open — a caller
- * could pair a legitimate response id with a different model — and it is why
- * `freeModelIdSchema` is no longer applied here. It still guards the id where
- * the id actually arrives, in `turn-request.ts`.
+ * The body names a response row and nothing else. Everything that reaches the
+ * model — which model, the prompt, and the whole prior conversation — is read
+ * from the database, because the database already holds all of it.
+ *
+ * That is the end of a short series of holes, and the shape is the lesson. The
+ * model id travelled here once, and could be pointed at someone else's row. Then
+ * the prompt could differ from the turn's, so an answer was filed under a
+ * question the model never saw. Then the prompt could be correct but followed by
+ * a trailing assistant turn that steered it. Then the prompt could be correct
+ * and last, with fabricated history in front of it. Each fix validated one more
+ * field, and each time the caller found the next one. Nothing sent from the
+ * browser is trusted now because nothing needs to be sent.
+ *
+ * `.strict()` on purpose: a stale client still posting `messages` gets a plain
+ * 400 rather than having its history quietly ignored, which would look like the
+ * server obeying it.
  */
-export const chatRequestSchema = z.object({
-  modelResponseId: z.string().min(1).max(64),
-  messages: z
-    .array(
-      z.object({
-        role: z.enum(["user", "assistant"]),
-        content: z.string().min(1),
-      }),
-    )
-    .min(1),
-});
+export const chatRequestSchema = z
+  .object({
+    modelResponseId: z.string().min(1).max(64),
+  })
+  .strict();
 
 export type ChatRequest = Readonly<z.infer<typeof chatRequestSchema>>;
-
-export type ChatMessage = ChatRequest["messages"][number];
-
-/**
- * The messages a caller sends must *end* with the prompt the turn recorded.
- *
- * The turn stores one canonical prompt and every metric, vote and leaderboard row
- * is attributed to it — but the text the model receives comes from the request
- * body. Nothing used to tie the two together, so a caller could hold a legitimate
- * pending response id and send entirely different text: the model would answer
- * that, and the answer plus its speed numbers would be filed under a prompt the
- * model never saw. That is a quiet corruption of exactly the data this app exists
- * to collect.
- *
- * The check is on the last message, not the last *user* message, and the
- * difference matters. Searching backwards for the most recent user message let a
- * caller append a trailing assistant turn after the real prompt — an
- * assistant-prefill, a well-known way to steer a model's answer. The prompt was
- * present, so the check passed, while the model's actual final input was the
- * injected text and the answer it produced still landed under the turn's prompt.
- * Requiring the conversation to end on the prompt closes that, and costs nothing:
- * a genuine turn always ends on the question being asked.
- *
- * Earlier messages are not checked and should not be. They are history the client
- * legitimately owns and replays — each model carries its own separate
- * conversation, so the server cannot reconstruct it — but the question being
- * asked right now is the turn's, and it has to be the last word.
- */
-export const endsWithPrompt = (
-  messages: readonly ChatMessage[],
-  prompt: string,
-): boolean => {
-  const lastMessage = messages.at(-1);
-
-  return lastMessage?.role === "user" && lastMessage.content === prompt;
-};
 
 /**
  * Metadata sent down the stream alongside the text. `start` carries the model
