@@ -1,0 +1,589 @@
+{
+  "info": {
+    "_postman_id": "ae5adcbc-b843-4455-b554-0023002a51f9",
+    "name": "LLM Arena",
+    "description": "Manual verification for LLM Arena's API. Import this, then work top to bottom.\n\n## First time\n\n1. Import `docs/llm-arena.postman_environment.template.json` alongside this collection and select it in the environment picker. Optional — the collection works standalone on its own variables — but it keeps your Clerk secret out of the collection file, and the filled-in copy is gitignored.\n2. Start the app: `pnpm dev`. Check `baseUrl` matches the port it actually claimed — it falls back to 3001 if 3000 is taken.\n3. Put your Clerk **secret** key (`sk_test_...`, from `.env.local`) in `clerkSecretKey`. If you skip the environment and use the collection variable instead, fill the **Current value** column, not Initial value — Initial value is what gets exported and committed.\n4. Run the four **Setup** requests in order. They find a user, open a session, and save a short-lived JWT into `sessionToken`, which every Chat request then uses.\n5. Run **Revoke session** when you're finished. Tokens last 15 minutes; if Chat starts returning 401, mint a new one.\n\nThe Setup scripts write to the active environment when there is one and to the collection otherwise, so either setup works — but don't half-do it. An environment that defines `sessionToken` shadows the collection's, so a stale empty value there beats a good value here.\n\n## Reading a chat response\n\n`/api/chat` returns an SSE stream, not JSON. Postman shows the raw event lines. The two worth reading:\n\n- `\"type\":\"start\"` — carries the `modelId`, so parallel streams are tellable apart.\n- `\"type\":\"finish\"` — carries the real measured numbers: `timeToFirstTokenMs`, `tokensPerSecond`, `outputTokens`, `totalMs`.\n\n`tokensPerSecond` is `null` when the provider returned everything in one chunk. That is correct — there is no rate to measure — not a bug.\n\nNo cost field anywhere. Every model here is free tier.\n\n## One model per request\n\nThere is no endpoint that takes three models. The arena sends three of these in parallel, each with one `modelId`, so a slow or failing model cannot take the other two answers down. To imitate the real thing, open three tabs and send them together.\n\n## Re-importing after a route is added\n\nThis collection is regenerated in the repo, not edited in Postman. When it changes, import the file again — the fixed `_postman_id` means Postman recognises it and offers to replace the existing copy instead of creating a duplicate. Choose replace.\n\nThat resets collection variable values, which is the other reason to keep your Clerk secret in the environment: environments are separate objects and survive a replace untouched.\n\nEdits made in the Postman UI are lost on the next replace. If you want something kept, put it in the file.\n\n## Not here yet\n\nThreads, turns, votes, and the leaderboard don't exist as endpoints yet (scope.md features 3, 6, and 9). This collection grows as they land.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{sessionToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string",
+      "description": "Where the dev server is actually listening."
+    },
+    {
+      "key": "clerkSecretKey",
+      "value": "",
+      "type": "string",
+      "description": "Clerk sk_test_... from .env.local. Leave empty in git — fill it in your local copy only."
+    },
+    {
+      "key": "clerkUserId",
+      "value": "",
+      "type": "string",
+      "description": "Filled by Setup step 1."
+    },
+    {
+      "key": "sessionId",
+      "value": "",
+      "type": "string",
+      "description": "Filled by Setup step 2."
+    },
+    {
+      "key": "sessionToken",
+      "value": "",
+      "type": "string",
+      "description": "Filled by Setup step 3. Short-lived; re-mint when Chat starts 401ing."
+    },
+    {
+      "key": "modelId",
+      "value": "nvidia/nemotron-3.5-lightning:free",
+      "type": "string",
+      "description": "Any free-tier OpenRouter id. See the OpenRouter reference folder for the live list."
+    }
+  ],
+  "item": [
+    {
+      "name": "Setup — get a session token",
+      "description": "Clerk's Backend API, not this app. These four exist so a browser sign-in isn't needed to exercise an authenticated endpoint by hand. They authenticate with clerkSecretKey rather than the collection's bearer token.",
+      "item": [
+        {
+          "name": "1. Find a user",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Write to the active environment when there is one, otherwise to the",
+                  "// collection. An environment variable shadows a collection variable of the",
+                  "// same name, so writing to the wrong scope leaves the value set but unread.",
+                  "const save = (key, value) => (pm.environment.name",
+                  "    ? pm.environment.set(key, value)",
+                  "    : pm.collectionVariables.set(key, value));",
+                  "",
+                  "// Capture the first user so the next request has someone to open a session for.",
+                  "const users = pm.response.json();",
+                  "if (Array.isArray(users) && users.length > 0) {",
+                  "    save('clerkUserId', users[0].id);",
+                  "    console.log('clerkUserId =', users[0].id);",
+                  "} else {",
+                  "    console.log('No users in this Clerk instance. Sign up once at ' + pm.variables.get('baseUrl') + '/sign-up first.');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{clerkSecretKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://api.clerk.com/v1/users?limit=5",
+              "protocol": "https",
+              "host": [
+                "api",
+                "clerk",
+                "com"
+              ],
+              "path": [
+                "v1",
+                "users"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "5"
+                }
+              ]
+            },
+            "description": "Saves the first user's id into clerkUserId. If this comes back empty, sign up once in the browser."
+          },
+          "response": []
+        },
+        {
+          "name": "2. Open a session",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// See step 1 for why this picks a scope rather than always writing to the collection.",
+                  "const save = (key, value) => (pm.environment.name",
+                  "    ? pm.environment.set(key, value)",
+                  "    : pm.collectionVariables.set(key, value));",
+                  "",
+                  "const session = pm.response.json();",
+                  "if (session && session.id) {",
+                  "    save('sessionId', session.id);",
+                  "    console.log('sessionId =', session.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{clerkSecretKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": \"{{clerkUserId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "https://api.clerk.com/v1/sessions",
+              "protocol": "https",
+              "host": [
+                "api",
+                "clerk",
+                "com"
+              ],
+              "path": [
+                "v1",
+                "sessions"
+              ]
+            },
+            "description": "Creates a real active session for that user. Revoke it when you're done (step 4)."
+          },
+          "response": []
+        },
+        {
+          "name": "3. Mint a session token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// See step 1 for why this picks a scope rather than always writing to the collection.",
+                  "const save = (key, value) => (pm.environment.name",
+                  "    ? pm.environment.set(key, value)",
+                  "    : pm.collectionVariables.set(key, value));",
+                  "",
+                  "const token = pm.response.json();",
+                  "if (token && token.jwt) {",
+                  "    save('sessionToken', token.jwt);",
+                  "    console.log('sessionToken saved to ' + (pm.environment.name || 'the collection') + '. Good for 15 minutes.');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{clerkSecretKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"expires_in_seconds\": 900\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "https://api.clerk.com/v1/sessions/{{sessionId}}/tokens",
+              "protocol": "https",
+              "host": [
+                "api",
+                "clerk",
+                "com"
+              ],
+              "path": [
+                "v1",
+                "sessions",
+                "{{sessionId}}",
+                "tokens"
+              ]
+            },
+            "description": "The JWT this returns is what /api/chat expects as a bearer token. Saved into sessionToken automatically."
+          },
+          "response": []
+        },
+        {
+          "name": "4. Revoke the session",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{clerkSecretKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "https://api.clerk.com/v1/sessions/{{sessionId}}/revoke",
+              "protocol": "https",
+              "host": [
+                "api",
+                "clerk",
+                "com"
+              ],
+              "path": [
+                "v1",
+                "sessions",
+                "{{sessionId}}",
+                "revoke"
+              ]
+            },
+            "description": "Housekeeping. Run this when you're finished poking at the API so a live session isn't left lying around."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Chat",
+      "description": "POST /api/chat — one model, one request, one stream.",
+      "item": [
+        {
+          "name": "Send a prompt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"modelId\": \"{{modelId}}\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Write two sentences about the color rust.\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chat",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "chat"
+              ]
+            },
+            "description": "The happy path. Watch for the trailing `\"type\":\"finish\"` event — that's where timeToFirstTokenMs, tokensPerSecond, outputTokens and totalMs live.\n\nFree models are genuinely slow and sometimes rate-limited upstream. If you get `\"type\":\"error\"` with \"That model didn't answer\", the real provider error is in the dev server log — that separation is deliberate."
+          },
+          "response": []
+        },
+        {
+          "name": "Send a follow-up",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"modelId\": \"{{modelId}}\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Write two sentences about the color rust.\"\n    },\n    {\n      \"role\": \"assistant\",\n      \"content\": \"Rust is a warm reddish-brown, the color of weathered iron. It reads as earthy rather than bright.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Now name one thing that pairs badly with it.\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chat",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "chat"
+              ]
+            },
+            "description": "The endpoint holds no conversation state — the client sends the whole history each time. In the real arena each model carries its own separate history, which is what makes a follow-up continue three independent conversations rather than one merged one."
+          },
+          "response": []
+        },
+        {
+          "name": "Unauthenticated → 401",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"modelId\": \"{{modelId}}\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"This should never reach a model.\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chat",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "chat"
+              ]
+            },
+            "description": "Deliberately sends no bearer token. Expect 401 and a plain sentence — no stack trace, no Clerk internals. Sending a prompt requires sign-in.\n\nAuth is checked before Arcjet, so an anonymous caller never reaches a rule and never consumes a rate-limit token."
+          },
+          "response": []
+        },
+        {
+          "name": "Blocked as a bot → 403",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "User-Agent",
+                "value": "python-requests/2.31.0"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"modelId\": \"{{modelId}}\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"This should never reach a model.\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chat",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "chat"
+              ]
+            },
+            "description": "Sends a scripted-client User-Agent that Arcjet recognises. Expect 403 and a plain sentence, with no model ever called. The refusal is deliberately identical for bot and shield denials — telling a caller which rule caught them helps an attacker and helps a real user not at all.\n\nPostman and curl are on the allow list on purpose: hand-verification through them is the only test path this project has. Every other automated client is denied. Note the ordering — bot detection runs before the rate limit, so this still returns 403 even when the bucket is already empty."
+          },
+          "response": []
+        },
+        {
+          "name": "Rate limited → 429",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"modelId\": \"\",\n  \"messages\": []\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chat",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "chat"
+              ]
+            },
+            "description": "Not a single-shot request — send it repeatedly to drain the bucket.\n\nThe limit is a token bucket keyed by the signed-in Clerk user, not by IP: capacity 30, refilling 15 per 60s, and one model call spends one token. Because one arena prompt is three parallel calls, that is ten three-model prompts back to back and five a minute sustained.\n\nThe body here is deliberately malformed so nothing upstream is spent while draining it: Arcjet decides before the body is parsed, so each send costs a token and returns 400 until the bucket empties. Expect 400 up to the 30th send, then 429 with a plain sentence naming the real seconds to wait (\"Try again in 55 seconds.\"). Wait a minute and it allows again."
+          },
+          "response": []
+        },
+        {
+          "name": "Malformed body → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"modelId\": \"\",\n  \"messages\": []\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chat",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "chat"
+              ]
+            },
+            "description": "Empty model id and no messages. Expect 400 and a plain sentence — the zod failure detail stays on the server."
+          },
+          "response": []
+        },
+        {
+          "name": "Unknown model → handled failure",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"modelId\": \"not-a-real/model:free\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Hello.\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chat",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "chat"
+              ]
+            },
+            "description": "Nothing validates the model id against OpenRouter's catalog, so this fails at call time. Expect a 200 with an `\"type\":\"error\"` event carrying a plain sentence — the stream had already opened by the time the provider refused. The real error goes to the server log."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "OpenRouter reference",
+      "description": "OpenRouter directly, not this app. Handy for grabbing a real model id, and it's the same catalog the model picker will use in scope.md feature 5.",
+      "item": [
+        {
+          "name": "Free models",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Print the free tier sorted by context window — the same order the picker will use.",
+                  "const free = pm.response.json().data",
+                  "    .filter((model) => model.id.endsWith(':free'))",
+                  "    .sort((a, b) => b.context_length - a.context_length);",
+                  "",
+                  "console.log(free.length + ' free models. Top 10 by context window:');",
+                  "free.slice(0, 10).forEach((model) => {",
+                  "    console.log(model.context_length + '  ' + model.id);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://openrouter.ai/api/v1/models",
+              "protocol": "https",
+              "host": [
+                "openrouter",
+                "ai"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "models"
+              ]
+            },
+            "description": "Public, no key needed. Open the Postman console after sending — the script prints the free tier sorted by context window so you can paste an id into the modelId variable."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

@@ -12,6 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Vendored Obsidian plugin bundles — not our source.
+    "docs/.obsidian/**",
+    // Prisma's generated client — rebuilt by `prisma generate`, never edited.
+    "prisma/generated/**",
   ]),
 ]);
 
