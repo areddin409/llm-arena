@@ -21,6 +21,8 @@ There are rough hand-drawn sketches for the arena screen, the leaderboard, and t
 | 1   | Connecting to a model                       | Foundation | done        |
 | 2   | Coding standards & tooling                  | Foundation | done        |
 | 3   | Data model                                  | Foundation | in progress |
+|     | ↳ schema & first migration                  |            | done        |
+|     | ↳ routes & Postman                          |            | open        |
 | 4   | Design & look                               | Foundation | not started |
 | 5   | Model picker                                | Slice 1    | not started |
 | 6   | Send a prompt, parallel streams, and voting | Slice 1    | not started |
@@ -264,8 +266,145 @@ first is preferred — it keeps concurrency handling out of the hot path — but
 is a data-model decision, so it gets made here.
 
 - [x] Prisma connected and proven against the real database (see below)
-- [ ] Decide the approach
-- [ ] Build it
+- [x] Decide the approach
+- [x] Write the schema and run the first migration, proven against the live database
+- [ ] Build the write paths: `POST /api/turns`, `POST /api/votes`, and persistence
+      inside `/api/chat`
+- [ ] Add all three routes to the Postman collection, happy path and failures
+
+#### What was decided
+
+The shape is `User → Thread → Turn → ModelResponse`, with `Vote` hanging off a
+`Turn`. Five models and one enum, in `prisma/schema.prisma`, which carries the
+same reasoning inline as doc comments so it is readable next to the fields it
+explains.
+
+**A turn holds its prompt as a field; there is no message table with a role
+column.** Every model in a turn answers the same text, so storing it once is
+what makes "two or more models answered this" a countable thing rather than a
+join to reason about. One model's own conversation, which feature 6's follow-ups
+need, is the thread's turns in `index` order, each turn's prompt paired with that
+model's response. A model that failed a turn contributes nothing to its own
+history, which is the right behaviour and falls out of the shape for free rather
+than needing a rule.
+
+**The turn-creation race from feature 1 is solved by creating everything up
+front.** A new `POST /api/turns` creates the thread if it is new, the turn, and
+one `PENDING` `ModelResponse` per selected model — all in one transaction — and
+returns the ids. The three parallel `/api/chat` calls each carry their own
+`modelResponseId` and only ever update that one row. Nothing races because
+nothing concurrent creates anything. The alternative parked in feature 1,
+resolving a client-generated turn id idempotently across three calls, would have
+put concurrency handling in the hot streaming path to save one round trip.
+
+**The vote rule is enforced in two places, deliberately.** The database holds
+what it can express declaratively: `@@unique([turnId, userId])` for one vote per
+person per turn, and a composite foreign key from `Vote(modelResponseId, turnId)`
+to `ModelResponse(id, turnId)` so a vote cannot point at a response from a
+different turn. That second one needs `@@unique([id, turnId])` on
+`ModelResponse`, which exists for no other purpose.
+
+The "two or more models actually answered" half stays in application code, inside
+the same transaction as the insert. Postgres cannot express a count over a
+related table in a `CHECK`, so the database-side options were a `BEFORE INSERT`
+trigger — raw SQL that Prisma does not model, invisible in the schema file, easy
+to lose on a reset — or a denormalized counter on `Turn` with a generated
+`votable` column and a composite key hung off it, which is fully declarative and
+still bottoms out on the app maintaining the counter. That moves the trust
+rather than removing it, and buys nothing when the only writer is one route in
+this app.
+
+The check is safe outside the database for a specific reason worth not
+rediscovering: `ResponseStatus` only moves one way. A response goes
+`PENDING → COMPLETE` or `PENDING → FAILED` once and never back, so the count of
+completed responses rises and never falls. The usual check-then-write hazard
+therefore cannot bite in the dangerous direction — the worst case is refusing a
+vote a few milliseconds before the second answer lands, on a turn whose UI has
+not rendered a second answer yet either.
+
+**No Clerk webhook; `User` rows are upserted lazily.** Clerk stays the source of
+truth for who someone is and the table holds nothing Clerk already holds — it
+exists so threads and votes have real referential integrity and the personal
+leaderboard is a join rather than a string filter. `upsertUser(clerkUserId)` runs
+as the first statement inside the `POST /api/turns` and `POST /api/votes`
+transactions, never as its own round trip, so a failed turn cannot leave an
+orphan user behind. A webhook would have needed signature verification, a
+backfill for anyone who signed up first, and would still race a thread write that
+arrives before `user.created` does. The table is shaped so a webhook can be added
+later to fill in a display name without a migration that touches foreign keys.
+
+**`modelId` and `modelName` are both stored, and they are different kinds of
+thing.** `modelId` is the stable `author/slug:free` key and is what the
+leaderboard groups by. `modelName` is a snapshot of the display name as it stood
+when that call was made, because feature 5's catalog is live: a model that gets
+renamed, or drops off the free tier, would otherwise leave a months-old thread
+and a leaderboard row with nothing to call themselves. The leaderboard groups by
+`modelId` and takes the most recent name it saw for that id. The name is
+caller-supplied, only ever displayed, and never trusted for logic — which is why
+`POST /api/turns` will take `models: [{ id, name }]` rather than a bare list of
+ids, with `id` still validated against `freeModelIdSchema`.
+
+**Token accounting stores input, output, and total separately.** Total is not
+reliably input plus output — reasoning and cached-input tokens land in a
+provider's total differently, and that is the same seam that made tokens/sec read
+in the thousands before feature 1 corrected it. All three are recorded as
+reported rather than recomputed. `costUsd` is `Decimal(12,6)`, always reads
+`0.000000` because every model here is free tier, and is stored anyway because it
+is a real measured number; a cost with no input token count beside it could never
+be audited.
+
+**No column stores a provider's error text.** A failed call is `FAILED` and the
+real exception goes to the server log. Keeping it out of a table the UI reads is
+how it stays out of the UI. `STREAMING` is likewise not a status — that state
+lives in the browser and never needs to survive a refresh.
+
+**No visibility flag on `Thread`.** Feature 8 makes every thread readable by
+link; only writing to one requires being the owner, which is an ownership check
+in a route, not a column.
+
+#### An unresolved contradiction, flagged not resolved
+
+`CLAUDE.md` says cost will always read $0.0000 and to **show it anyway**, since
+it is still a real, honestly measured number. Feature 6 below says **no cost
+shown**, and feature 9 says no cost stat on the leaderboard. Those disagree. The
+column exists either way; the display question belongs to feature 6 and should be
+settled there rather than silently by whichever screen gets built first.
+
+#### Verified by hand
+
+The migration is `prisma/migrations/20260813032554_initial_data_model`. A
+throwaway raw-SQL probe ran against the real Prisma Postgres instance — raw SQL
+on purpose, since the point was what Postgres itself refuses, not what the Prisma
+client refuses on the way there. It seeded two users, a thread, two turns, and
+four responses, then deleted the users and confirmed the cascade emptied every
+table. Probe deleted afterwards.
+
+Allowed, as they should be:
+
+- A vote from user A for a `COMPLETE` response on the same turn.
+- A vote from user B on that same turn for a different response.
+
+Refused by Postgres, each by the named constraint:
+
+- The same user voting twice on one turn — `Vote_turnId_userId_key`.
+- A winner belonging to a different turn — `Vote_modelResponseId_turnId_fkey`.
+  This is the composite key earning its keep.
+- Two responses for the same model in one turn — `ModelResponse_turnId_modelId_key`.
+- Two turns claiming the same index in a thread — `Turn_threadId_index_key`.
+- A thread owned by a nonexistent user — `Thread_userId_fkey`.
+- A duplicate Clerk id — `User_clerkUserId_key`.
+- A status outside the enum (`STREAMING` was the probe value) — `22P02`.
+
+Also confirmed: `costUsd` defaults to `0.000000`, and the seeded turn reports
+exactly 2 `COMPLETE` responses, which is the count the vote transaction will
+read.
+
+`pnpm check` (format, lint, typecheck) and `pnpm build` both clean.
+
+Not verified, because it does not exist yet: the ≥2 rule itself. It lives in the
+vote transaction, which is in the still-open checklist item above, and it cannot
+be exercised until `POST /api/votes` is built. The database half of the rule is
+proven; the application half is designed and unbuilt.
 
 #### Prisma is connected
 
@@ -314,6 +453,9 @@ and typecheck, lint, and `next build` all pass.
 
 No migration has been run. `prisma migrate dev` is the first act of the schema
 decision, not part of this step.
+
+_Since superseded: the schema decision has been made and the first migration is
+applied. See "What was decided" and "Verified by hand" above._
 
 ### 4. Design & look
 
@@ -544,6 +686,10 @@ constraint, and the turn-creation race from three parallel POSTs. Inventing a
 schema inside a verification pass would settle both by accident. The connection
 itself is already proven (see "Prisma is connected"); it is only the schema
 that is missing.
+
+**No longer blocked.** The schema was decided and
+`20260813032554_initial_data_model` applied on 2026-08-13, with both questions
+settled rather than defaulted — see feature 3's "What was decided" above.
 
 ### Blocked: PostHog events
 
