@@ -19,8 +19,10 @@ const openrouter = createOpenRouter({
 
 /**
  * A model id is whatever OpenRouter calls it, e.g.
- * `google/gemma-4-31b-it:free`. The live free-tier catalog that produces these
- * ids is feature 5; nothing here validates the id against that list, so an
- * unknown id fails at call time with a provider error.
+ * `google/gemma-4-31b-it:free`. Callers are expected to have run the id through
+ * `freeModelIdSchema` first — that is what keeps a paid model from being billed
+ * to this app. The live free-tier catalog is feature 5; nothing here validates
+ * the id against that list, so an unknown free id fails at call time with a
+ * provider error.
  */
 export const chatModel = (modelId: string) => openrouter.chat(modelId);
