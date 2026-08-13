@@ -32,7 +32,7 @@ export type ChatRequest = Readonly<z.infer<typeof chatRequestSchema>>;
 export type ChatMessage = ChatRequest["messages"][number];
 
 /**
- * The messages a caller sends must actually end in the prompt the turn recorded.
+ * The messages a caller sends must *end* with the prompt the turn recorded.
  *
  * The turn stores one canonical prompt and every metric, vote and leaderboard row
  * is attributed to it — but the text the model receives comes from the request
@@ -42,20 +42,27 @@ export type ChatMessage = ChatRequest["messages"][number];
  * model never saw. That is a quiet corruption of exactly the data this app exists
  * to collect.
  *
- * Only the final user message is checked. Earlier turns are history the client
+ * The check is on the last message, not the last *user* message, and the
+ * difference matters. Searching backwards for the most recent user message let a
+ * caller append a trailing assistant turn after the real prompt — an
+ * assistant-prefill, a well-known way to steer a model's answer. The prompt was
+ * present, so the check passed, while the model's actual final input was the
+ * injected text and the answer it produced still landed under the turn's prompt.
+ * Requiring the conversation to end on the prompt closes that, and costs nothing:
+ * a genuine turn always ends on the question being asked.
+ *
+ * Earlier messages are not checked and should not be. They are history the client
  * legitimately owns and replays — each model carries its own separate
  * conversation, so the server cannot reconstruct it — but the question being
- * asked right now is the turn's, and it has to match.
+ * asked right now is the turn's, and it has to be the last word.
  */
 export const endsWithPrompt = (
   messages: readonly ChatMessage[],
   prompt: string,
 ): boolean => {
-  const lastUserMessage = messages.findLast(
-    (message) => message.role === "user",
-  );
+  const lastMessage = messages.at(-1);
 
-  return lastUserMessage?.content === prompt;
+  return lastMessage?.role === "user" && lastMessage.content === prompt;
 };
 
 /**

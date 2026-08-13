@@ -465,6 +465,18 @@ no way for a call to _reserve_ a response row, only to check it.
   server cannot reconstruct it. A rejection releases the reservation back to
   PENDING rather than FAILED — nothing was attempted, so the row must look
   untouched.
+- **The first version of that prompt binding could still be bypassed.** It
+  searched backwards for the most recent _user_ message, which meant a caller
+  could send the turn's real prompt and then append a trailing _assistant_ turn.
+  The prompt was present, so the check passed — while the model's actual final
+  input was the injected text. Putting words in a model's mouth as a trailing
+  assistant message is a well-known way to steer its answer, and the answer it
+  produced would still have been filed under the turn's prompt with its speed
+  numbers attached, which is the same corruption the binding was added to
+  prevent, just through a narrower door. The check is now on the last message
+  rather than the last user message: the conversation has to _end_ on the turn's
+  prompt. That costs nothing, because a genuine turn always ends on the question
+  being asked, and it was verified not to break a real follow-up.
 - **The collection's "Unknown model" request had gone stale.** It still sent the
   old `modelId` field and omitted the now-required `modelResponseId`, so it was
   exercising body validation while claiming to exercise the provider-failure
@@ -493,6 +505,10 @@ Against the running dev server and the real database, all green:
   row afterwards holds exactly one answer.
 - **A mismatched prompt** → 400, and the row reads PENDING with no reservation
   afterwards — released, not failed.
+- **The turn's real prompt followed by a trailing assistant turn** → 400, row
+  released. And the check that closes it does not break a genuine follow-up:
+  history, an assistant reply, and the new prompt last still streams to 200 and
+  stores a complete answer.
 - **Re-answering a COMPLETE row** → 409. Still closed for good.
 - **A genuinely nonexistent model** (`ghost/model-that-never-was:free`, which
   passes the `:free` shape check and cannot exist) → the stream carried only
