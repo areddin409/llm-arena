@@ -501,6 +501,39 @@
           "response": []
         },
         {
+          "name": "Paid model → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"modelId\": \"anthropic/claude-sonnet-4.5\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"This should never reach a model.\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chat",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "chat"
+              ]
+            },
+            "description": "A well-formed but paid OpenRouter id, sent by a properly signed-in caller. Expect 400 and the same plain sentence as any other malformed body — no stream opens and OpenRouter is never called, so this app's credits are never spent on a model outside the free tier. Every model in this arena is free tier, so the `:free` suffix is required on every id the route accepts."
+          },
+          "response": []
+        },
+        {
           "name": "Unknown model → handled failure",
           "request": {
             "method": "POST",
@@ -529,7 +562,7 @@
                 "chat"
               ]
             },
-            "description": "Nothing validates the model id against OpenRouter's catalog, so this fails at call time. Expect a 200 with an `\"type\":\"error\"` event carrying a plain sentence — the stream had already opened by the time the provider refused. The real error goes to the server log."
+            "description": "The id passes the `:free` shape check but nothing validates it against OpenRouter's catalog, so this fails at call time. Expect a 200 with an `\"type\":\"error\"` event carrying a plain sentence — the stream had already opened by the time the provider refused. The real error goes to the server log."
           },
           "response": []
         }

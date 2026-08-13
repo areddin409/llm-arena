@@ -92,6 +92,16 @@ upstream rate-limit, not a simulated one.
   first content chunk of any kind. A provider that returns everything in one
   chunk reports no rate at all rather than an invented one — there is genuinely
   nothing to measure there.
+- **The model id was accepted unchecked,** as any nonempty string, and passed
+  straight to OpenRouter. A signed-in caller could therefore post a *paid* model
+  id and spend this app's credits on a model outside the free-tier catalog the
+  arena is built around. Fixed by `features/models/model-id.ts`: an id must now
+  match `author/slug:free`, the suffix OpenRouter uses to mark the free variant,
+  and a paid id is rejected with the same 400 and plain sentence as any other
+  bad body — before the provider is called. This is a shape check, not a catalog
+  check; feature 5's live free-tier list should also be checked against once it
+  exists, and until then an unknown-but-free id still fails at call time as a
+  handled provider error.
 - **PostHog is not wired.** No PostHog key exists yet; it needs a project key
   before anything real can be turned on. Prisma was in this list too and its
   connection is now live — see "Prisma is connected" under feature 3. Arcjet
