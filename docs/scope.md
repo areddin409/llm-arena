@@ -200,12 +200,46 @@ in would make the cheap gate expensive enough that people stop running it.
   `.prettierignore` with the reason written next to them. `AGENTS.md` is ignored
   too, since `next dev` rewrites it.
 
+#### Corrected in review
+
+The feature-boundary rules were reviewed and only about half enforced what they
+claimed. A comment flagged that `@/features/<other>/internal/helper` slipped
+through; that specific case turned out to fire correctly, but probing every
+combination rather than only the one raised found four real holes:
+
+- **A later config object replaces `no-restricted-imports`, it does not merge
+  with it.** The per-feature blocks listed only their own patterns, so every file
+  under `features/` silently lost the project-wide rules — the climb-out ban and
+  the generated-Prisma-client ban did not apply to the code most likely to break
+  them. The shared patterns are now spliced into each per-feature block on
+  purpose, with a comment saying why.
+- **A sibling feature reached relatively was caught by nothing.**
+  `../models/openrouter` from inside `features/chat` crosses a feature boundary
+  without looking like it climbs out.
+- **Climb-out patterns were listed at two depths only**, so `../features/...`
+  from `app/` passed. Depths are now spelled out 1 through 4, deliberately not
+  written as one glob with a leading `**` — that would also match the
+  `@/features/...` form the rule exists to push people toward.
+- **`@/prisma/generated/*` missed nested paths**, now `@/prisma/generated/**`.
+  Tightening it immediately caught `features/database/prisma.ts` itself, which is
+  the one file that legitimately constructs the client, so it is exempted by
+  name — an exemption that only became necessary once the merge bug above was
+  fixed and the rule started applying there at all.
+
 #### Verified by hand
 
 No test runner, as decided:
 
 - A probe file containing `any`, an unused variable, and `console.log` was
   linted: all three rules fired with the intended messages. File deleted.
+- A probe matrix of fifteen import specifiers across `app/`, a feature root, and
+  a folder one level inside a feature: all ten that should be rejected fired
+  with the intended message, and the five legitimate ones — a top-level import
+  of another feature through `@/`, two same-folder imports, an intra-feature
+  climb, and `features/database/prisma.ts` importing the generated client —
+  stayed clean. A sibling file in that same folder importing the generated
+  client still fails, so the exemption is scoped to the one file rather than the
+  folder. Probes deleted.
 - That same file staged and committed: the pre-commit hook **rejected** the
   commit and restored the working tree untouched.
 - A formatting-only file staged and committed: the hook **fixed and committed the

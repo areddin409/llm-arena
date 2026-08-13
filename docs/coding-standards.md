@@ -112,18 +112,31 @@ everyone reads. Preferring `map`/`filter`/`reduce` over a mutating loop, and
 Code lives under `features/<name>/`, not in layer-wide folders. Each feature owns
 its internals and is reached through its top-level files.
 
-Two ESLint rules keep this real rather than aspirational:
+Three ESLint rules keep this real rather than aspirational:
 
-- A relative import that climbs two or more levels into another feature is an
-  error. Use `@/features/<name>/...`.
+- Any relative import that climbs out toward `features/` is an error, at every
+  depth. Use `@/features/<name>/...`.
+- A sibling feature reached relatively — `../models/x` from inside
+  `features/chat` — is an error for the same reason, even though it does not
+  look like climbing out.
 - One feature importing into another feature's _subfolder_ is an error. Cross a
   feature boundary at its top level or not at all.
+
+Those patterns are spelled out per depth rather than written as one glob with a
+leading `**`, which would also match the `@/features/...` form the rules exist to
+push people toward. Four levels covers the repo with room to spare. If a feature
+ever nests deeper than that, extend the depth list — and note that the per-feature
+config blocks repeat the project-wide patterns deliberately: a later ESLint config
+object _replaces_ `no-restricted-imports` rather than merging with it, so listing
+only the feature-specific patterns there would switch the shared ones off for
+exactly the files that need them most.
 
 `app/` holds routes and layout only. A route handler wires features together; it
 does not hold logic that another route could ever want.
 
 The Prisma client is constructed in exactly one place, `features/database/prisma.ts`,
-and importing `@/prisma/generated/*` directly is an error. There was a second
+and importing `@/prisma/generated/**` directly is an error everywhere except that
+one file, which needs it to construct the client and is exempted by name. There was a second
 client in a `lib/` folder once; it read `process.env` unvalidated, was not marked
 `server-only`, and leaked connection pools in development. It is gone, and the
 lint rule is what stops it coming back.

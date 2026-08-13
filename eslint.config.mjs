@@ -6,6 +6,43 @@ import nextTs from "eslint-config-next/typescript";
 // stop other features from reaching past a feature's entry files into them.
 const FEATURES = ["auth", "chat", "database", "models", "security"];
 
+/**
+ * Relative specifiers that climb out of the importing folder to reach
+ * `features/`. Spelled out per depth rather than as a single glob, because a
+ * leading `**` would also match the `@/features/...` form this rule exists to
+ * push people toward. Four levels covers every folder depth in the repo with
+ * room to spare.
+ */
+const climbOutOfFeatures = [1, 2, 3, 4].map(
+  (depth) => `${"../".repeat(depth)}features/**`,
+);
+
+/**
+ * Import rules every file in the project is held to. These are repeated into
+ * the per-feature configs below on purpose: a later config object *replaces*
+ * `no-restricted-imports` rather than merging with it, so a per-feature block
+ * that listed only its own patterns would silently switch these off for exactly
+ * the files that need them most.
+ */
+const sharedImportRules = [
+  {
+    group: climbOutOfFeatures,
+    message:
+      "Import a feature through '@/features/<name>/...' rather than climbing out of your own folder.",
+  },
+];
+
+/**
+ * The generated Prisma client is constructed in exactly one place. Kept separate
+ * from the shared rules above because that one place has to be exempt from it —
+ * see the override at the bottom of this file.
+ */
+const generatedPrismaClientRule = {
+  group: ["@/prisma/generated", "@/prisma/generated/**"],
+  message:
+    "Import the Prisma client from '@/features/database/prisma' — it is the only place a client is constructed.",
+};
+
 const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
@@ -81,20 +118,7 @@ const eslintConfig = defineConfig([
       // their own files rather than reaching into each other's internals.
       "no-restricted-imports": [
         "error",
-        {
-          patterns: [
-            {
-              group: ["../../features/*/*", "../../../features/*/*"],
-              message:
-                "Import a feature through '@/features/<name>/...' rather than climbing out of your own folder.",
-            },
-            {
-              group: ["@/prisma/generated/*"],
-              message:
-                "Import the Prisma client from '@/features/database/prisma' — it is the only place a client is constructed.",
-            },
-          ],
-        },
+        { patterns: [...sharedImportRules, generatedPrismaClientRule] },
       ],
     },
   },
@@ -113,26 +137,56 @@ const eslintConfig = defineConfig([
   // A feature may not import another feature's internals. features/chat can use
   // features/models' exports; it cannot reach into a file that feature never
   // meant to hand out. Expressed per-feature so the message names the offender.
-  ...FEATURES.map((feature) => ({
-    name: `llm-arena/feature-boundary/${feature}`,
-    files: [`features/${feature}/**/*.{ts,tsx}`],
+  ...FEATURES.map((feature) => {
+    const others = FEATURES.filter((other) => other !== feature);
+
+    return {
+      name: `llm-arena/feature-boundary/${feature}`,
+      files: [`features/${feature}/**/*.{ts,tsx}`],
+      rules: {
+        "no-restricted-imports": [
+          "error",
+          {
+            patterns: [
+              ...sharedImportRules,
+              generatedPrismaClientRule,
+              {
+                // A sibling feature reached relatively — `../models/x` from
+                // features/chat, or `../../models/x` from a folder one deeper.
+                // Short enough not to look like climbing out, but it crosses a
+                // feature boundary all the same, so the depths are spelled out
+                // the same way the climb-out patterns are.
+                group: others.flatMap((other) =>
+                  [1, 2, 3, 4].flatMap((depth) => [
+                    `${"../".repeat(depth)}${other}`,
+                    `${"../".repeat(depth)}${other}/**`,
+                  ]),
+                ),
+                message:
+                  "Import a sibling feature through '@/features/<name>/...', not relatively.",
+              },
+              {
+                group: others.map((other) => `@/features/${other}/*/**`),
+                message:
+                  "Reach another feature through its top-level files only, not into its subfolders.",
+              },
+            ],
+          },
+        ],
+      },
+    };
+  }),
+
+  // The single exemption to the rule above: this is the file that constructs the
+  // Prisma client, so it is the one place allowed to import the generated one.
+  // Everything else it is held to stays in force — only that group is dropped.
+  {
+    name: "llm-arena/prisma-client-owner",
+    files: ["features/database/prisma.ts"],
     rules: {
-      "no-restricted-imports": [
-        "error",
-        {
-          patterns: [
-            {
-              group: FEATURES.filter((other) => other !== feature).map(
-                (other) => `@/features/${other}/**/*/**`,
-              ),
-              message:
-                "Reach another feature through its top-level files only, not into its subfolders.",
-            },
-          ],
-        },
-      ],
+      "no-restricted-imports": ["error", { patterns: sharedImportRules }],
     },
-  })),
+  },
 ]);
 
 export default eslintConfig;
