@@ -4,7 +4,22 @@ import nextTs from "eslint-config-next/typescript";
 
 // Feature folders under features/. Each one owns its internals; the rules below
 // stop other features from reaching past a feature's entry files into them.
-const FEATURES = ["auth", "chat", "database", "models", "security"];
+const FEATURES = [
+  "arena",
+  "auth",
+  "chat",
+  "database",
+  "http",
+  "leaderboard",
+  "models",
+  "security",
+  "shell",
+  "theme",
+  "turns",
+  "ui",
+  "users",
+  "votes",
+];
 
 /**
  * Relative specifiers that climb out of the importing folder to reach
@@ -176,6 +191,25 @@ const eslintConfig = defineConfig([
       },
     };
   }),
+
+  // Vendored shadcn components. They are ours to edit — and are edited, where
+  // the defaults failed this project's contrast baseline — but they are not
+  // ours to have written, and three React Compiler rules fire on upstream code
+  // that predates them: a `setState` in an effect in `use-mobile`, and
+  // `Math.random()` inside a `useMemo` in `SidebarMenuSkeleton`.
+  //
+  // Scoped to these two rules rather than ignoring the folder, so everything
+  // else — no `any`, import boundaries, `console.log` — still applies here.
+  // Files written by hand in this folder are held to the same rules as the rest
+  // of the project; only the vendored ones trip these.
+  {
+    name: "llm-arena/vendored-shadcn",
+    files: ["features/ui/**/*.{ts,tsx}"],
+    rules: {
+      "react-hooks/set-state-in-effect": "off",
+      "react-hooks/purity": "off",
+    },
+  },
 
   // The single exemption to the rule above: this is the file that constructs the
   // Prisma client, so it is the one place allowed to import the generated one.
