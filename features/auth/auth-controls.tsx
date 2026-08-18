@@ -1,28 +1,22 @@
 import { Show, SignInButton, SignUpButton, UserButton } from "@clerk/nextjs";
+import { Button } from "@/features/ui/button";
 
 /**
- * Temporary auth controls. Uses the create-next-app tokens on purpose — the real
- * palette and shell land with scope.md features 4 (Design & look) and 7 (App shell).
+ * Sign-in, sign-up, and the account menu. Reads the shared palette through the
+ * Button component; Clerk's own modal is themed from the same tokens in
+ * app/layout.tsx, so nothing here carries colors of its own.
  */
 export function AuthControls() {
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex items-center gap-2">
       <Show when="signed-out">
         <SignInButton mode="modal">
-          <button
-            type="button"
-            className="rounded-full px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-black/[.06] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current dark:hover:bg-white/[.08]"
-          >
+          <Button variant="ghost" size="sm">
             Sign in
-          </button>
+          </Button>
         </SignInButton>
         <SignUpButton mode="modal">
-          <button
-            type="button"
-            className="rounded-full bg-foreground px-4 py-2 text-sm font-medium text-background transition-opacity hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current"
-          >
-            Sign up
-          </button>
+          <Button size="sm">Create account</Button>
         </SignUpButton>
       </Show>
       <Show when="signed-in">

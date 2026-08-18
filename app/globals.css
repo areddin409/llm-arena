@@ -1,26 +1,244 @@
 @import "tailwindcss";
 
+/*
+ * The design system for LLM Arena. Every color, radius, and type treatment in
+ * the app comes from here — nothing downstream writes a raw hex or a repeated
+ * class cluster. The direction itself (warm coffee ground, one rust accent,
+ * green only for a winner, red only for errors) is decided in docs/scope.md
+ * under feature 4; this file is the implementation of that decision, not a
+ * second opinion on it.
+ *
+ * Token names follow shadcn's vocabulary deliberately, so shadcn components and
+ * hand-written ones read from one palette instead of two. The mapping that
+ * matters: --primary IS the rust accent. It is reserved for things you interact
+ * with — buttons, links, focus rings, the win-rate bar — and is never used as
+ * decoration. shadcn's --accent is its own subtle hover surface and is not the
+ * accent color in the design's sense; our code does not use it directly.
+ */
+
+/* Dark mode is a class, set by next-themes, not a media query — the theme
+   toggle has to be able to override the system preference. */
+@custom-variant dark (&:is(.dark *));
+
+/* Light: warm parchment, not paper white. Every pair below is measured against
+   its real background, not estimated. Ratios are in the comments so a future
+   change can be checked rather than guessed at. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: light;
+
+  --background: #f5ede4;
+  --foreground: #2a1d17; /* 14.1:1 on background */
+  --card: #fffbf6;
+  --card-foreground: #2a1d17;
+  --popover: #fffbf6;
+  --popover-foreground: #2a1d17;
+
+  --muted: #ece0d3;
+  --muted-foreground: #6e5a4e; /* 5.6:1 on background */
+
+  /* The rust accent. Interactive only. */
+  --primary: #b8481b; /* 4.6:1 on background */
+  --primary-foreground: #fffbf6; /* 5.1:1 on primary */
+  --primary-hover: #9e3c14;
+
+  /* shadcn's hover surface. Not the design's accent — see the note above. */
+  --accent: #efe4d8;
+  --accent-foreground: #2a1d17;
+  --secondary: #ece0d3;
+  --secondary-foreground: #2a1d17;
+
+  /* Green marks a winner and nothing else. */
+  --winner: #2f6b44; /* 5.5:1 on background */
+  --winner-foreground: #fffbf6;
+
+  /* Red means an error and nothing else. */
+  --destructive: #b3382c; /* 5.2:1 on background */
+  --destructive-foreground: #fffbf6;
+
+  --border: #e0d2c4;
+  --border-strong: #c9b5a3;
+  --input: #c9b5a3;
+  --ring: #b8481b;
+
+  --radius: 0.5rem;
+
+  /*
+   * shadcn's Sidebar carries its own token family. Every one of them points at
+   * a token already defined above, so the sidebar is the same palette rather
+   * than a second one — which is the whole reason these are worth writing down
+   * instead of leaving as installed. What ships by default is a blue-gray ramp,
+   * and `--sidebar-ring` in particular arrives as blue, which this project's
+   * design rules forbid outright.
+   *
+   * Defined once, not per theme. `:root` and `.dark` are the same element, so a
+   * `var()` here resolves against whichever value of `--card` is winning — the
+   * mapping cannot drift out of step with the palette it points at.
+   */
+  --sidebar: var(--card);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: var(--muted);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
+}
+
+/* Dark: coffee, warm through the whole ramp. No neutral gray, no true black —
+   #1a1310 still reads brown next to a pure black surface. */
+.dark {
+  color-scheme: dark;
+
+  --background: #1a1310;
+  --foreground: #f2e7df; /* 15.1:1 on background */
+  --card: #241a16;
+  --card-foreground: #f2e7df; /* 14.0:1 on card */
+  --popover: #241a16;
+  --popover-foreground: #f2e7df;
+
+  --muted: #2e211c;
+  --muted-foreground: #b29c90; /* 7.0:1 on background, 6.5:1 on card */
+
+  /* Rust has to stay clearly brighter and more saturated than the ground it
+     sits on — two warm tones this close is exactly where a button disappears
+     into the page. 5.4:1 on background and 5.0:1 on card is the margin. */
+  --primary: #e2662f;
+  --primary-foreground: #1a1310; /* 5.4:1 on primary */
+  --primary-hover: #f27b45;
+
+  --accent: #2e211c;
+  --accent-foreground: #f2e7df;
+  --secondary: #2e211c;
+  --secondary-foreground: #f2e7df;
+
+  --winner: #5fa772; /* 6.3:1 on background */
+  --winner-foreground: #1a1310;
+
+  --destructive: #e05a4e; /* 5.0:1 on background */
+  --destructive-foreground: #1a1310;
+
+  --border: #3b2a23;
+  --border-strong: #56403a;
+  --input: #56403a;
+  --ring: #e2662f;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-hover: var(--primary-hover);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-winner: var(--winner);
+  --color-winner-foreground: var(--winner-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 4px);
+
+  /* One easing curve for anything that opens, closes, or slides. Decelerating
+     hard at the end is what stops a panel reading as a snap — the default
+     `ease` is close enough to linear at this duration to look like none. */
+  --ease-smooth: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* Archivo carries both roles: expanded for signage, normal width for prose.
+     One family, two widths, so headings and body never look borrowed from
+     different projects. JetBrains Mono holds every measured number. */
+  --font-sans: var(--font-archivo);
+  --font-mono: var(--font-jetbrains-mono);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  }
+
+  /*
+   * The accessibility baseline, applied once rather than remembered per screen.
+   * Rust at 5.4:1 against the dark ground and 4.6:1 against the light one, so
+   * the focused control is never ambiguous in either mode.
+   */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background-color: var(--primary);
+    color: var(--primary-foreground);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/*
+ * Type roles. Three utilities rather than three class clusters repeated across
+ * files — a heading that needs the display treatment asks for it by name.
+ */
+
+/* Signage. Archivo at full expanded width, the way a scoreboard is set. */
+@utility type-display {
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  font-stretch: 125%;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.05;
+}
+
+/* Small structural labels above a section or beside a control. */
+@utility type-eyebrow {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+/* Every measured number in the app: ms, tokens/sec, token counts, win rates.
+   Tabular figures so a column of them lines up and a streaming number does not
+   jitter as its digits change. */
+@utility type-metric {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8125rem;
+  letter-spacing: -0.01em;
 }
