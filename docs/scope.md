@@ -812,6 +812,65 @@ Two files, one drawing — `features/ui/brand-mark.tsx` and `app/icon.svg` chang
 together. Next's stock `app/favicon.ico` was deleted rather than left beside it,
 so the browser is offered exactly one icon.
 
+**The model mark carries the provider's logo, and it was promoted out of "Not
+doing right now" because one letter was not doing the job.** That list used to
+hold "giving each model's own little icon a distinct look"; it came out on
+2026-08-18 when the single letter turned out to be failing at something more
+basic than looking plain. Two models from one provider collide on it outright —
+`Google: Gemma 4 26B` and `Google: Gemma 4 31B` both rendered a bare `G`, and in
+the top bar's win chips the mark was the _only_ visible identifier, so the two
+were genuinely indistinguishable.
+
+So the fix is two halves, and the artwork is only one of them.
+
+**The mark takes an id, not a hand-written letter.** `google/gemma-4-31b-it:free`
+already names its author, so `modelAuthor()` reads it in `model-id.ts` beside the
+schema that already defines that format. The `initial` field kept on all three
+placeholder types is deleted — it was a second, hand-maintained copy of something
+the id already said, and feature 5's live list would have had to invent a value
+for it on every row.
+
+**Four marks are vendored, not depended on.** `features/models/model-glyph.ts`
+holds paths for Google, Mistral, NVIDIA and Qwen, copied from simple-icons
+(CC0-1.0). The package is not a dependency: it ships some three thousand marks
+for the four this app draws. Every one is rendered in `currentColor` at
+`muted-foreground`, never in a brand color — Google's blue would put the one hue
+this design forbids outright straight into the chrome, and a full-color logo
+beside a rust button makes decoration louder than the accent reserved for things
+you can click. The helmet above settled that for our own mark; a borrowed one
+does not get a wider licence.
+
+**The letter fallback is the common path, not the edge case.** simple-icons has
+no InclusionAI, so it renders `I` today, and once feature 5 reads OpenRouter live
+and feature 10 widens past the free tier, most authors will have no vendored
+mark. A glyph is drawn bare at full size because a silhouette reads best with
+nothing ringed around it; a letter keeps the ring, because a bare letter is not a
+mark until something contains it. Same box either way, so a mixed row still
+lines up.
+
+**Known weak spot: NVIDIA's eye at 20px.** Checked by rendering, the way the
+helmet was. At 28px on a card it reads; at 20px in a chip it closes into a
+smudge — the same failure the helmet's hairline subpaths had. The helmet's fix
+was to cut subpaths, which is not available here, since a simplified NVIDIA mark
+stops being NVIDIA's mark. Kept anyway: at `md` it carries real information, and
+at `sm` the model name now sits beside it so the mark is no longer identifying
+anything on its own. If it ever reads as noise, deleting the `nvidia` entry
+drops it to an `N` and nothing else changes.
+
+**The top-bar chip gained the model's name, and no glyph could have replaced
+it.** Both Gemmas draw the same Google mark, so art alone cannot separate them.
+The chip shows `modelShortName()` — the model half of OpenRouter's
+`Vendor: Model` string — because keeping `Google: ` would repeat what the mark
+already says and then truncate away the `26B` that is the entire difference.
+Below `lg` the name hides and the chip shrinks back to mark and number, which is
+the crowding behaviour this feature already committed to.
+
+**The `svg` is wrapped in a `span`, for the reason recorded below about
+`SidebarMenuButton`.** `Badge` ends its class list with `[&>svg]:size-3`, and
+`ModelMark` sits directly inside a `Badge` in both the top bar and the composer,
+so a bare `svg` would have been pinned to 12px. The same trap, caught the second
+time by having written it down the first time.
+
 **Dark is not hard-coded as the default; the system is.** `next-themes` with
 `attribute="class"`, so a first visit follows the machine and a toggle can then
 disagree with it and be remembered. A media query alone could not do the second
@@ -1226,7 +1285,7 @@ Screens built, each ahead of the feature that fills it: the arena (feature 6),
 the leaderboard (feature 9), and the models catalog (feature 5). The shell
 chrome itself is this feature's own. Files: `features/shell/`,
 `features/arena/`, `features/leaderboard/leaderboard-screen.tsx`,
-`features/models/model-catalog.tsx`, and `features/ui/model-mark.tsx` plus
+`features/models/model-catalog.tsx`, and `features/models/model-mark.tsx` plus
 `features/ui/placeholder-notice.tsx` as the shared pieces.
 
 #### Reversed, and it should not have needed asking
@@ -1548,7 +1607,6 @@ _Nothing yet — this feature is decided, not built._
 Kept here so the plan stays honest about what's deliberately left out.
 
 - A "fastest" label on the leaderboard, tagging whichever model already has the best average speed, only for models with enough votes to mean anything. Nice to have, not required.
-- Giving each model's own little icon a distinct look instead of plain gray. Nice to have, not required.
 - Privacy policy and terms pages.
 - Rich link previews when a thread gets shared somewhere.
 - Any kind of admin or moderation page.
