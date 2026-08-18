@@ -1,7 +1,7 @@
 import { type PlaceholderResponse } from "@/features/shell/placeholder-data";
 import { Badge } from "@/features/ui/badge";
 import { Button } from "@/features/ui/button";
-import { ModelMark } from "@/features/ui/model-mark";
+import { ModelMark } from "@/features/models/model-mark";
 import { TimingRail } from "@/features/ui/timing-rail";
 import { ChevronDownIcon } from "lucide-react";
 
@@ -42,7 +42,7 @@ export function ResponseColumn({ response, axisMs }: ResponseColumnProps) {
     <article className="flex w-full min-w-0 flex-col rounded-xl border border-border bg-card">
       <header className="flex items-start justify-between gap-3 px-4 pt-4">
         <div className="flex min-w-0 items-center gap-2">
-          <ModelMark initial={response.initial} />
+          <ModelMark modelId={response.modelId} />
           <h3 className="truncate text-sm font-medium">{response.modelName}</h3>
         </div>
 

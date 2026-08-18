@@ -1,5 +1,5 @@
 import { PLACEHOLDER_CATALOG } from "@/features/shell/placeholder-data";
-import { ModelMark } from "@/features/ui/model-mark";
+import { ModelMark } from "@/features/models/model-mark";
 import { PlaceholderNotice } from "@/features/ui/placeholder-notice";
 
 function Detail({
@@ -46,7 +46,7 @@ export function ModelCatalog() {
             className="flex flex-col rounded-xl border border-border bg-card p-4"
           >
             <div className="flex min-w-0 items-center gap-2.5">
-              <ModelMark initial={model.initial} />
+              <ModelMark modelId={model.modelId} />
               <div className="min-w-0">
                 <h2 className="truncate text-sm font-medium">
                   {model.modelName}

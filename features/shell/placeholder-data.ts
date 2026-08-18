@@ -57,8 +57,6 @@ export function findPlaceholderThread(
 export type PlaceholderResponse = {
   readonly modelId: string;
   readonly modelName: string;
-  /** Displayed in the top bar's per-model chips. */
-  readonly initial: string;
   readonly content: string;
   readonly ttftMs: number | null;
   readonly tokensPerSecond: number | null;
@@ -84,7 +82,6 @@ export const PLACEHOLDER_TURN: PlaceholderTurn = {
     {
       modelId: "inclusionai/ling-3.0-tiny:free",
       modelName: "InclusionAI: Ling 3.0 Tiny",
-      initial: "L",
       content:
         "Imagine a big pile of toy blocks, all mixed up. You pick one block and call it the picker. Every block smaller than the picker goes in a pile on the left, every bigger one goes on the right. Now you have two smaller piles, and you do the very same thing to each of them, again and again, until every pile is just one block. Put the piles back in a line and they are magically in order.",
       ttftMs: 1314,
@@ -97,7 +94,6 @@ export const PLACEHOLDER_TURN: PlaceholderTurn = {
     {
       modelId: "nvidia/nemotron-3.5-lightning:free",
       modelName: "NVIDIA: Nemotron 3.5 Lightning",
-      initial: "N",
       content:
         "Quicksort is like tidying a shelf of books. You grab one book and hold it up. Any book that comes before it goes to the left of the shelf; any book that comes after it goes to the right. The book you are holding is now in exactly the right spot forever. Then you tidy the left side the same way, and the right side the same way, and you keep going until each little group has only one book in it.",
       ttftMs: 678,
@@ -110,7 +106,6 @@ export const PLACEHOLDER_TURN: PlaceholderTurn = {
     {
       modelId: "google/gemma-4-26b-a4b-it:free",
       modelName: "Google: Gemma 4 26B",
-      initial: "G",
       content: "",
       ttftMs: null,
       tokensPerSecond: null,
@@ -125,7 +120,6 @@ export const PLACEHOLDER_TURN: PlaceholderTurn = {
 export type PlaceholderRanking = {
   readonly modelId: string;
   readonly modelName: string;
-  readonly initial: string;
   readonly wins: number;
   readonly votes: number;
   readonly avgTtftMs: number;
@@ -136,7 +130,6 @@ export const PLACEHOLDER_RANKINGS: readonly PlaceholderRanking[] = [
   {
     modelId: "nvidia/nemotron-3.5-lightning:free",
     modelName: "NVIDIA: Nemotron 3.5 Lightning",
-    initial: "N",
     wins: 507,
     votes: 700,
     avgTtftMs: 1186,
@@ -145,7 +138,6 @@ export const PLACEHOLDER_RANKINGS: readonly PlaceholderRanking[] = [
   {
     modelId: "inclusionai/ling-3.0-tiny:free",
     modelName: "InclusionAI: Ling 3.0 Tiny",
-    initial: "L",
     wins: 288,
     votes: 512,
     avgTtftMs: 894,
@@ -154,7 +146,6 @@ export const PLACEHOLDER_RANKINGS: readonly PlaceholderRanking[] = [
   {
     modelId: "google/gemma-4-26b-a4b-it:free",
     modelName: "Google: Gemma 4 26B",
-    initial: "G",
     wins: 141,
     votes: 402,
     avgTtftMs: 1533,
@@ -163,7 +154,6 @@ export const PLACEHOLDER_RANKINGS: readonly PlaceholderRanking[] = [
   {
     modelId: "google/gemma-4-31b-it:free",
     modelName: "Google: Gemma 4 31B",
-    initial: "G",
     wins: 96,
     votes: 388,
     avgTtftMs: 1702,
@@ -174,7 +164,6 @@ export const PLACEHOLDER_RANKINGS: readonly PlaceholderRanking[] = [
 export type PlaceholderCatalogEntry = {
   readonly modelId: string;
   readonly modelName: string;
-  readonly initial: string;
   readonly author: string;
   readonly contextWindow: number;
 };
@@ -183,42 +172,36 @@ export const PLACEHOLDER_CATALOG: readonly PlaceholderCatalogEntry[] = [
   {
     modelId: "nvidia/nemotron-3.5-lightning:free",
     modelName: "Nemotron 3.5 Lightning",
-    initial: "N",
     author: "NVIDIA",
     contextWindow: 262144,
   },
   {
     modelId: "inclusionai/ling-3.0-tiny:free",
     modelName: "Ling 3.0 Tiny",
-    initial: "L",
     author: "InclusionAI",
     contextWindow: 131072,
   },
   {
     modelId: "google/gemma-4-26b-a4b-it:free",
     modelName: "Gemma 4 26B",
-    initial: "G",
     author: "Google",
     contextWindow: 131072,
   },
   {
     modelId: "google/gemma-4-31b-it:free",
     modelName: "Gemma 4 31B",
-    initial: "G",
     author: "Google",
     contextWindow: 65536,
   },
   {
     modelId: "qwen/qwen3-8b:free",
     modelName: "Qwen3 8B",
-    initial: "Q",
     author: "Qwen",
     contextWindow: 40960,
   },
   {
     modelId: "mistralai/mistral-small-3.2:free",
     modelName: "Mistral Small 3.2",
-    initial: "M",
     author: "Mistral",
     contextWindow: 32768,
   },

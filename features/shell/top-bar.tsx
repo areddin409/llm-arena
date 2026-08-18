@@ -14,7 +14,8 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/features/ui/breadcrumb";
-import { ModelMark } from "@/features/ui/model-mark";
+import { ModelMark } from "@/features/models/model-mark";
+import { modelShortName } from "@/features/models/model-name";
 import { Separator } from "@/features/ui/separator";
 import { SidebarTrigger } from "@/features/ui/sidebar";
 import { useParams, usePathname } from "next/navigation";
@@ -73,13 +74,24 @@ export function TopBar() {
         exists. It shrinks to the mark and the number on a narrow screen, which
         is the crowding case the sketch calls out, rather than wrapping onto a
         second line.
+
+        The name is not decoration here, and it is deliberately the model's
+        rather than the full `modelName`. A provider mark cannot separate two
+        models from the same provider — Gemma 4 26B and Gemma 4 31B draw the
+        same Google glyph — so this is the only thing in the chip that tells
+        them apart. Keeping the "Google: " prefix would repeat what the mark
+        already says and then truncate away the "26B" that is the entire
+        difference, which is the failure this chip exists to fix.
       */}
       {thread ? (
         <ul className="hidden items-center gap-1.5 sm:flex">
           {PLACEHOLDER_TURN.responses.map((response) => (
             <li key={response.modelId}>
-              <Badge variant="outline" className="gap-1.5 py-0.5 pr-2 pl-0.5">
-                <ModelMark initial={response.initial} size="sm" />
+              <Badge variant="outline" className="gap-1.5 py-0.5 pr-2 pl-1">
+                <ModelMark modelId={response.modelId} size="sm" />
+                <span className="hidden max-w-28 truncate lg:inline">
+                  {modelShortName(response.modelName)}
+                </span>
                 <span className="type-metric">
                   <span className="sr-only">{response.modelName} has won </span>
                   {response.winsThisThread}/{PLACEHOLDER_TURN.turnsInThread}

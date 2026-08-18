@@ -1,7 +1,7 @@
 import { PLACEHOLDER_TURN } from "@/features/shell/placeholder-data";
 import { Badge } from "@/features/ui/badge";
 import { Button } from "@/features/ui/button";
-import { ModelMark } from "@/features/ui/model-mark";
+import { ModelMark } from "@/features/models/model-mark";
 import { Textarea } from "@/features/ui/textarea";
 import { ArrowUpIcon, PlusIcon, XIcon } from "lucide-react";
 
@@ -29,7 +29,7 @@ export function PromptDock() {
             {PLACEHOLDER_TURN.responses.map((response) => (
               <li key={response.modelId}>
                 <Badge variant="outline" className="gap-1.5 py-0.5 pr-1 pl-0.5">
-                  <ModelMark initial={response.initial} size="sm" />
+                  <ModelMark modelId={response.modelId} size="sm" />
                   <span className="max-w-32 truncate">
                     {response.modelName}
                   </span>

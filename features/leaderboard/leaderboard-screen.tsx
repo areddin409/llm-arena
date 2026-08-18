@@ -13,7 +13,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/features/ui/empty";
-import { ModelMark } from "@/features/ui/model-mark";
+import { ModelMark } from "@/features/models/model-mark";
 import { PlaceholderNotice } from "@/features/ui/placeholder-notice";
 import { ToggleGroup, ToggleGroupItem } from "@/features/ui/toggle-group";
 import { cn } from "@/features/ui/utils";
@@ -44,7 +44,7 @@ function RankRow({
 
       <td className="px-4 py-4">
         <div className="flex min-w-0 items-center gap-2.5">
-          <ModelMark initial={ranking.initial} />
+          <ModelMark modelId={ranking.modelId} />
           <span className="truncate text-sm font-medium">
             {ranking.modelName}
           </span>
