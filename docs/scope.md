@@ -1401,6 +1401,57 @@ breakpoint, the sidebar collapsing and the mobile overlay, focus order through
 the shell, and the screens in both themes. This project has no browser
 automation by decision, so that is a human pass.
 
+#### Corrected after review
+
+`/check review` ran over the branch on 2026-08-18, on `sonnet` against code
+written on `opus`, so the reviewer did not share the author's blind spots. The
+findings are kept at `docs/reviews/2026-08-18-design-and-look.md`. It confirmed
+the palette holds and that this file's account matches the code, and it raised
+one real bug.
+
+**The remove-model chip clipped its own focus ring, and the human pass is what
+proved it.** Flagged by the review, then reproduced by tabbing to it in a real
+browser — which is exactly the check that had been recorded above as still owed,
+and the one no tool in this project can run.
+
+The geometry: a `size="icon-xs"` button is a 24px box whose focus ring is 2px at
+a 2px offset, so it needs 4px of clearance. The chip was a `Badge`, whose class
+list ends in `overflow-hidden` and which gave it `py-0.5`, 2px. The ring was
+cropped flat top and bottom. Horizontally `pr-1` happened to give the 4px, which
+is why it read as a circle sliced across rather than a square — a useful tell,
+since it points straight at padding rather than at the ring itself.
+
+**The fix is a `ModelChip` component, not an override at the call site.** This
+is not a bug in `Badge`: `Badge` clips on purpose so its content stays inside
+the pill, and it is the right element for a label. It is the wrong element for a
+container holding something focusable. Reaching for `overflow-visible` on that
+one `Badge` would have fixed the pixel and left the trap set for the next chip,
+so `features/models/model-chip.tsx` draws its own pill instead. It lives with
+the models feature for the same reason `ModelMark` does — it knows what an
+OpenRouter id and a `Vendor: Model` name look like.
+
+Feature 5 gets the chip it needs already built, and already correct, rather than
+copying the broken shape out of the composer.
+
+The top bar's win chips stay `Badge`es. Nothing in them takes focus, which is
+the whole distinction. Two similar-looking pills is under this project's own
+stated "same classes in three places" threshold, and collapsing them into one
+component would mean a chip that serves a metric and a button through the same
+slot for no gain.
+
+**Left open, deliberately, and recorded rather than silently dropped:** the
+review's other findings. A card shell (`rounded-xl border border-border bg-card`)
+copy-pasted across three files while the vendored `Card` sits unused, and a
+label/value row existing twice as `Metric` and `Detail`. That one is a real hit
+against this project's own rule and is worth doing, but it touches the arena and
+the catalog together and belongs with feature 5 or 6 rather than bolted onto a
+review fix. Two minors beside it: the per-model "Pick this" buttons have no
+unique accessible name, and the arena has no `<h1>`.
+
+**Verified after the fix:** `pnpm format:check`, `pnpm lint`, `pnpm typecheck`
+and `pnpm build` all clean, eleven routes in the manifest. The ring renders
+whole when tabbed to, confirmed by hand in the browser.
+
 ## Slice 3: Public visibility & sharing
 
 ### 8. Public thread visibility & sharing

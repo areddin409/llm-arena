@@ -1,9 +1,8 @@
+import { ModelChip } from "@/features/models/model-chip";
 import { PLACEHOLDER_TURN } from "@/features/shell/placeholder-data";
-import { Badge } from "@/features/ui/badge";
 import { Button } from "@/features/ui/button";
-import { ModelMark } from "@/features/models/model-mark";
 import { Textarea } from "@/features/ui/textarea";
-import { ArrowUpIcon, PlusIcon, XIcon } from "lucide-react";
+import { ArrowUpIcon, PlusIcon } from "lucide-react";
 
 /**
  * The composer. Chips for the models this turn will go to, the prompt itself,
@@ -28,22 +27,10 @@ export function PromptDock() {
           <ul className="flex flex-wrap items-center gap-1.5">
             {PLACEHOLDER_TURN.responses.map((response) => (
               <li key={response.modelId}>
-                <Badge variant="outline" className="gap-1.5 py-0.5 pr-1 pl-0.5">
-                  <ModelMark modelId={response.modelId} size="sm" />
-                  <span className="max-w-32 truncate">
-                    {response.modelName}
-                  </span>
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    className="rounded-full"
-                  >
-                    <XIcon />
-                    <span className="sr-only">
-                      Remove {response.modelName} from this turn
-                    </span>
-                  </Button>
-                </Badge>
+                <ModelChip
+                  modelId={response.modelId}
+                  modelName={response.modelName}
+                />
               </li>
             ))}
           </ul>
