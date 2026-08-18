@@ -21,12 +21,13 @@ There are rough hand-drawn sketches for the arena screen, the leaderboard, and t
 | 1   | Connecting to a model                       | Foundation | done        |
 | 2   | Coding standards & tooling                  | Foundation | done        |
 | 3   | Data model                                  | Foundation | done        |
-| 4   | Design & look                               | Foundation | not started |
+| 4   | Design & look                               | Foundation | done        |
 | 5   | Model picker                                | Slice 1    | not started |
 | 6   | Send a prompt, parallel streams, and voting | Slice 1    | not started |
-| 7   | App shell & thread history                  | Slice 2    | not started |
+| 7   | App shell & thread history                  | Slice 2    | UI built    |
 | 8   | Public thread visibility & sharing          | Slice 3    | not started |
 | 9   | Leaderboard: global & personal              | Slice 4    | not started |
+| 10  | Bring your own key                          | Slice 5    | decided     |
 
 ## Foundation
 
@@ -561,13 +562,20 @@ Against the running dev server and the real database, all green:
 The full 21-check route suite was re-run afterwards and still passes, so none of
 this regressed the turn, vote, or streaming paths.
 
-#### An unresolved contradiction, flagged not resolved
+#### An unresolved contradiction — now resolved by feature 10
 
 `CLAUDE.md` says cost will always read $0.0000 and to **show it anyway**, since
-it is still a real, honestly measured number. Feature 6 below says **no cost
-shown**, and feature 9 says no cost stat on the leaderboard. Those disagree. The
-column exists either way; the display question belongs to feature 6 and should be
-settled there rather than silently by whichever screen gets built first.
+it is still a real, honestly measured number. Feature 6 below said **no cost
+shown**, and feature 9 said no cost stat on the leaderboard. Those disagreed. The
+column exists either way; the display question belonged to feature 6 and should
+not have been settled silently by whichever screen got built first.
+
+**Settled by feature 10.** Cost is shown on the response card, and stays off the
+global leaderboard. Once a user can bring their own key, cost stops being a
+constant — a free model reads `$0.000000` and a BYOK model reads a real nonzero
+number, so the field carries information rather than repeating itself. The global
+leaderboard excludes BYOK responses entirely, so a cost stat there really would
+be a column of zeros, and stays out. See feature 10 below.
 
 #### Verified by hand
 
@@ -714,8 +722,157 @@ applied. See "What was decided" and "Verified by hand" above._
 
 A coffee or dark brown background, warm, not neutral gray or true black. One accent color, rust, used only for things you interact with, buttons, links, focus states, the win-rate bar, never as decoration. Because the background and the accent are both warm tones from the same family, the accent has to stay clearly brighter and more saturated than the background, enough that a button never blends into the page behind it, that's a real risk with two warm colors this close and worth checking by eye, not just by the numbers. Blue, indigo, and purple are never the accent, under any circumstance. Green is reserved only for marking a winner, red only for errors, never reused for anything else. Contrast should genuinely hold up in both light and dark mode, not just look fine at a glance.
 
-- [ ] Decide the approach
-- [ ] Build it
+- [x] Decide the approach
+- [x] Build it
+
+#### What was decided
+
+The rules above fix the palette's _intent_; this step fixed the actual values,
+the typography, the one memorable element, and the wiring — so features 5 to 9
+never write a color again.
+
+**The subject is instrumentation, not chat.** This app's whole claim is honestly
+measured numbers, so the design is shaped like a scoreboard: data set in a real
+tabular mono and treated as the point, rather than as small gray caption text
+under a chat bubble. That is what the typography and the signature element below
+are both derived from.
+
+**Every color is measured, not eyeballed.** The pairs, with their real ratios:
+
+| Token            | Dark               | Light              |
+| ---------------- | ------------------ | ------------------ |
+| page             | `#1A1310`          | `#F5EDE4`          |
+| card             | `#241A16`          | `#FFFBF6`          |
+| text             | `#F2E7DF` (15.1:1) | `#2A1D17` (14.1:1) |
+| muted text       | `#B29C90` (7.0:1)  | `#6E5A4E` (5.6:1)  |
+| rust (`primary`) | `#E2662F` (5.4:1)  | `#B8481B` (4.6:1)  |
+| winner           | `#5FA772` (6.3:1)  | `#2F6B44` (5.5:1)  |
+| error            | `#E05A4E` (5.0:1)  | `#B3382C` (5.2:1)  |
+
+The specific worry written into this feature — rust disappearing into brown,
+two warm tones from one family — is the 5.4:1 line. It clears AA on its own, and
+rust never appears as a flat fill against a bare background anyway: a button
+carries dark ink _on_ rust, which is another 5.4:1.
+
+**Token names follow shadcn's vocabulary rather than inventing a parallel one,
+and the mapping that matters is `--primary` IS the rust accent.** The obvious
+naming — calling our accent `--accent` — collides head-on with shadcn, where
+`--accent` is a subtle hover surface that ghost and outline buttons fill with.
+Two different meanings for one utility name would have meant either patching
+every shadcn component or keeping a second palette beside the first. Reusing
+`--primary` costs one paragraph of explanation in `globals.css` and buys a
+single source of color for hand-written and vendored components alike.
+
+**Archivo at two widths, JetBrains Mono for every number.** The `wdth` axis is
+loaded explicitly in `layout.tsx`, so headings can run at 125% expanded — the
+signage treatment — while body copy stays normal width. One family across both
+roles, so headings and prose never look borrowed from different projects. The
+serif-on-cream direction was deliberately avoided: it is the single most common
+look an AI produces for a warm-background brief, and it says nothing about
+measurement.
+
+Three type roles exist as `@utility` classes rather than repeated class
+clusters: `type-display` (signage), `type-eyebrow` (small structural labels),
+and `type-metric` (every ms, tok/sec and token count, with tabular figures so a
+column lines up and a streaming number does not jitter as its digits change).
+
+**The signature element is the timing rail**, built as
+`features/ui/timing-rail.tsx`. A hairline under a response card that fills as
+the model streams, notched where first token landed, with every rail in a turn
+drawn against one shared time axis — so a slow model is visibly short beside a
+fast one. It is the speed numbers made watchable instead of read afterwards.
+Rust while live, green once voted winner, red when the call failed, which is
+exactly the three-color rule doing real work rather than decorating.
+
+The component is pure and presentational: it takes fractions and renders them.
+Measuring stays in `features/chat/call-metrics.ts` and deciding the shared axis
+belongs to the turn, both feature 6's. It is `aria-hidden` on purpose — it
+carries nothing that is not already beside it as text, and three simultaneous
+progressbars announce constantly while saying nothing new.
+
+**The logo is a Spartan helmet, and it is the one place the palette rules bend
+toward nothing.** It replaced a rust `LA` lettermark. Supplied as artwork the
+project owns, vectorised, then cut down: the trace arrived as three layers and
+only one is used. A full-canvas white plate was the background of the image it
+was traced from and had to go for the mark to be transparent at all. A red ring
+around the helmet was dropped because red is reserved for errors here — a red
+logo would mean red says two things, and every real error afterwards reads
+slightly weaker. The helmet's own ten subpaths were cut to four; the other six
+were hairline interior detail that turned the mark into a grey smudge below
+about 24px. That was settled by rendering the candidates at 16, 20, 28 and 32px
+and looking, not by judging them at full size.
+
+The mark itself takes `currentColor` and is drawn in plain `foreground` — no
+accent plate. Rust is for things you interact with, and a logo plate was
+borrowing it as decoration. `app/icon.svg` is the one copy that carries its own
+colors, because a browser loads it with no page around it: the coffee plate is
+its own ground, so the cream helmet holds on a light or dark tab bar without a
+`prefers-color-scheme` swap that would only make the tab harder to find again.
+Two files, one drawing — `features/ui/brand-mark.tsx` and `app/icon.svg` change
+together. Next's stock `app/favicon.ico` was deleted rather than left beside it,
+so the browser is offered exactly one icon.
+
+**Dark is not hard-coded as the default; the system is.** `next-themes` with
+`attribute="class"`, so a first visit follows the machine and a toggle can then
+disagree with it and be remembered. A media query alone could not do the second
+half.
+
+**Accessibility is applied once, in `globals.css`, not remembered per screen.**
+A 2px rust `:focus-visible` outline at 2px offset, and a
+`prefers-reduced-motion` block. shadcn's Button overrides the outline with its
+own ring, so it was edited to match the baseline exactly rather than diverge —
+see below.
+
+#### Found while building
+
+- **shadcn's Button shipped two accessibility problems, both fixed in place.**
+  Its focus ring is 3px of `ring-ring/50` — rust at half opacity, which lands
+  under 3:1 against the coffee ground. And its destructive variant hard-codes
+  `text-white`, which is 3.66:1 on the dark-mode red; the
+  `--destructive-foreground` token is 5.02:1. Both were found by measuring the
+  vendored file rather than trusting it, and the reasons are written into the
+  component next to the change.
+- **`next-themes` logs a React 19 console error** — "Encountered a script tag
+  while rendering React component" — because its no-flash script is rendered
+  from inside a client component. A hand-rolled replacement was built and then
+  reverted on request: the error is a dev-only warning and the provider stays.
+  Recorded because it will show up again in the console and is not a bug in this
+  app's code.
+- **shadcn's `SidebarMenuButton` pins any direct `svg` child to 16px.** Its
+  class list ends with `[&>svg]:size-4`, which outranks a size utility written
+  on the element itself, so the logo silently rendered at 16px — the size where
+  its interior detail stops reading. Two changes fix it: wrap the mark in a
+  `span` so it is no longer a direct `svg` child, and give the header button
+  `size="lg"`, which is the only size variant that drops padding in the
+  collapsed rail (`group-data-[collapsible=icon]:p-0!`) and so leaves a full
+  32px icon box. Worth knowing before adding any other non-lucide graphic to a
+  sidebar row.
+- **The ESLint `FEATURES` list was four features out of date.** It listed
+  `auth, chat, database, models, security` while `http`, `turns`, `users` and
+  `votes` had since been added — so the feature-boundary rules described in
+  `docs/coding-standards.md` were silently not applying to any of them. Now
+  complete, plus the two added here (`theme`, `ui`). Adding the missing four
+  surfaced no existing violations, so nothing had actually gone wrong yet.
+
+#### Verified by hand
+
+Against the running dev server, no test runner:
+
+- `pnpm format:check`, `pnpm lint`, `pnpm typecheck`, and `pnpm build` all clean,
+  with all seven routes still in the manifest.
+- `GET /` returns 200 and the served HTML carries the new type utilities.
+- Both palettes are present in the served CSS — `--primary: #b8481b` under
+  `:root` and `#e2662f` under `.dark` — along with `--winner` in both modes,
+  `font-stretch: 125%` on `type-display`, all three type utilities, and the
+  global `:focus-visible` outline in the base layer.
+- Clerk's appearance is passed as `var(--…)` references, confirmed present in
+  the server-rendered payload, so its modal follows the theme toggle rather than
+  carrying a second palette.
+
+**Not verified by machine, and it cannot be:** contrast by eye, the keyboard-only
+pass, and that Clerk's components actually resolve `var()` colors rather than
+falling back. This project has no browser automation by decision, so those are
+genuine human checks — see the reply that accompanied this build.
 
 ## Slice 1: Core arena loop
 
@@ -723,12 +880,33 @@ A coffee or dark brown background, warm, not neutral gray or true black. One acc
 
 An "Add model" popover pulling OpenRouter's live free-tier list, sorted by context window, capped at three models, defaulting to all three selected, with removable chips next to the prompt box. Also render that same catalog as a simple `/models` page, name, context window, and pricing for each one, so anyone can browse the full list without opening the picker.
 
+**Amended by feature 10, before this was built.** The catalog is no longer
+free-tier-only. It pulls the whole OpenRouter list, marks which entries are free,
+and shows paid models as selectable-but-gated until the person has added their
+own key. The `/models` page shows everything for the same reason — its pricing
+column is finally worth reading once not every row is zero. The key-entry control
+lives in this picker rather than on a settings screen, because this is where the
+need actually arises and there is no app shell until feature 7.
+
 - [ ] Decide the approach
 - [ ] Build it
 
 ### 6. Send a prompt, parallel streams, and voting
 
-The heart of the product. One prompt goes to every selected model at once, each streaming and failing independently, so one being slow or down never blocks the others. Each answer shows its own real time-to-first-token, tokens per second, and total tokens. No cost shown, every model here is free tier, so it would always read zero. A vote only exists once two or more models have answered, and picking one writes exactly one vote and marks that answer as the winner, while every answer stays visible the whole time. A follow-up continues each model's own separate conversation.
+The heart of the product. One prompt goes to every selected model at once, each streaming and failing independently, so one being slow or down never blocks the others. Each answer shows its own real time-to-first-token, tokens per second, total tokens, and cost. A vote only exists once two or more models have answered, and picking one writes exactly one vote and marks that answer as the winner, while every answer stays visible the whole time. A follow-up continues each model's own separate conversation.
+
+**Two amendments from feature 10**, both made before this was built:
+
+- **Cost is shown.** The original "no cost shown, it would always read zero"
+  reasoning stops holding the moment someone can bring their own key, and
+  `CLAUDE.md` said to show it regardless. A free model reads `$0.000000`, a BYOK
+  model reads its real number. This is the resolution of the contradiction
+  flagged under feature 3.
+- **The API-key input must be masked from session replay** — `ph-no-capture` on
+  the field, in place _before_ replay is switched on, not afterwards. Replay is
+  turned on as part of this feature, and a key typed into an unmasked input is
+  captured in the recording. This is the single most likely way feature 10 leaks
+  a credential, and it is prevented here rather than there.
 
 Arcjet sits in front of this endpoint before any model is ever called: rate limiting, bot protection, and a shield, plus a real limit on how much one person can use across all three models at once, not just a limit on the endpoint overall. **This part is built already** — see below.
 
@@ -979,6 +1157,190 @@ The frame everything else sits inside: a top bar and sidebar that stay in place 
 
 - [ ] Decide the approach
 - [ ] Build it
+- [x] The UI, built ahead of the data (see below)
+
+#### The UI, built ahead of the data
+
+Built out of order, on request, immediately after feature 4 landed and while
+every data decision in this feature is still open. **Chrome and screens only —
+nothing here reads a database, calls a model, or writes a vote.** Every screen
+carries a `PlaceholderNotice` saying so out loud, because a page quietly showing
+invented numbers as if they were measured is the exact thing this app exists to
+argue against.
+
+**Every stand-in value lives in one file**, `features/shell/placeholder-data.ts`,
+grouped so each screen's placeholders can be deleted in one piece as its feature
+lands — threads with feature 7, the turn with feature 6, rankings with feature 9,
+the catalog with feature 5. The numbers in it are the real measurements recorded
+in the 2026-08-12 verification run above, so nothing on screen is invented from
+nowhere even while it is still a placeholder.
+
+**A route group, `app/(app)/`, holds everything inside the shell.** Sign-in and
+sign-up sit outside it deliberately: a sidebar full of somebody's threads is no
+use to a person who has not signed in yet. The root layout lost its header in the
+same move — the shell owns the app's chrome now, and the auth screens carry only
+a wordmark and the theme toggle.
+
+**Thread URLs are `/t/[threadId]`, with `/` a fresh arena that has no thread
+behind it yet.** Settled here rather than left to feature 6, because a shell
+whose sidebar, breadcrumb and nav all point at `/` is a shell that lies about
+navigation, and that is the one thing a frame has to get right.
+
+Two things decided the shape. **Feature 8 is the binding constraint:** a thread
+link gets pasted somewhere by a stranger and has to be short, stable, and
+readable with no account, which rules out nesting it under anything that reads
+as somebody's workspace. And **feature 3's API already implies the flow** —
+`POST /api/turns` creates the thread on the first prompt and returns the ids, so
+"an arena with no thread yet" is a real state rather than a loading one, and the
+move to `/t/[threadId]` happens when the server says the id exists. The route
+shape falls out of the data model instead of being imposed on it.
+
+`/arena/[threadId]` was the alternative, mirroring the sketch's "Arena /
+Thread 1" breadcrumb exactly. Rejected: the sketches are structure only by this
+file's own rule, a breadcrumb is a label hierarchy rather than a path, and that
+URL reads as a page inside someone's account — the opposite of what a shared
+link should feel like. `/threads/[threadId]` was rejected for length, and for
+spending the `/threads` path on a detail route.
+
+**One piece of feature 8 came along for free and is genuinely built:** an unknown
+thread id renders a plain not-found page inside the shell rather than an error.
+It is proven — `/t/nope` returns 404 today. `findPlaceholderThread` is what
+answers "no such thread" for now; feature 7 swaps it for a real query and the
+behaviour stays.
+
+**The shell is composed from shadcn's components, not hand-rolled.** This was
+not true when this section was first written — see "Reversed, and it should not
+have needed asking" below, which records what the hand-rolled version got wrong
+and why the reasoning behind it did not hold.
+
+**The metrics panel on a response card is a native `<details>`.** Keyboard
+operable and correctly announced with no JavaScript and no state, which is worth
+more than a custom disclosure on a card that will eventually have three of itself
+side by side, each streaming.
+
+**The leaderboard's Personal tab is an empty state, not a second table of
+invented rows.** Nobody has voted yet, so "You haven't voted yet" is the true
+screen, and it is one feature 9 has to build anyway.
+
+Screens built, each ahead of the feature that fills it: the arena (feature 6),
+the leaderboard (feature 9), and the models catalog (feature 5). The shell
+chrome itself is this feature's own. Files: `features/shell/`,
+`features/arena/`, `features/leaderboard/leaderboard-screen.tsx`,
+`features/models/model-catalog.tsx`, and `features/ui/model-mark.tsx` plus
+`features/ui/placeholder-notice.tsx` as the shared pieces.
+
+#### Reversed, and it should not have needed asking
+
+The shell was hand-rolled first — sidebar, breadcrumb, badges, empty states, the
+segmented control, all of it as styled `div`s. That was wrong, it was decided
+silently rather than reported, and it was reversed when it was queried.
+
+**The reason given for it did not survive contact with the component.** The
+argument was that shadcn's Sidebar arrives with its own `--sidebar-*` token
+family and would amount to a second palette. It is eight CSS variables, and
+pointing them at the tokens that already exist is eight lines in `globals.css`.
+It was worth doing for a reason stronger than tidiness, though: the default
+`--sidebar-ring` ships as **blue**, which this project's design rules forbid
+outright. Installed and left alone, the sidebar would have quietly broken
+feature 4.
+
+**What the hand-rolled version was missing** is exactly what had to be
+hand-written and then fixed: the mobile/desktop open-state split, easing on
+collapse, and a focus-trapped mobile panel. shadcn ships all three, plus cookie
+persistence so a reload keeps the collapsed state, `Cmd`/`Ctrl+B`, an icon rail,
+and `SidebarMenuSkeleton` for the loading state feature 7 needs.
+
+**It was not only the sidebar.** Running shadcn's own rules over the build found
+seven more places where custom markup stood in for a component that existed:
+`<hr>` for `Separator`, three empty states for `Empty`, a notice `div` for
+`Alert`, two badge-shaped spans for `Badge`, and a pair of buttons for
+`ToggleGroup`.
+
+**The audit tax is real and was paid.** Four of the eleven vendored components
+now in `features/ui/` shipped an accessibility defect against this palette: the
+same 3px, 50%-opacity focus ring in `Button`, `Input`, `Badge` and `Toggle`,
+under 3:1 against the coffee ground; and `text-white` on the destructive variant
+of both `Button` and `Badge`, which is 3.66:1 on the dark-mode red where the
+token is 5.02:1. All fixed in place with the reason written beside each change.
+Anyone adding a shadcn component to this project should expect to check the same
+two things.
+
+**Three ESLint rules had to be handled rather than ignored.** `use-mobile` calls
+`setState` in an effect and `SidebarMenuSkeleton` calls `Math.random()` in a
+`useMemo`; both are upstream code predating the React Compiler rules, and both
+are switched off for `features/ui/**` only — scoped to those two rules, so `any`,
+the import boundaries and `console.log` still apply there. The third was
+`SidebarMenuButton` reassigning its `tooltip` parameter, which is a rule with a
+real reason behind it, so that one was fixed in the component instead of
+exempted.
+
+**Two costs, both accepted deliberately.** Reading the sidebar cookie on the
+server makes `AppShell` a server component, which drops `/`, `/leaderboard` and
+`/models` from prerendered to server-rendered on demand. Worth it: the
+alternative is the panel flicking open and then shut on every reload, and these
+routes go dynamic anyway the moment they read a real thread for a signed-in
+person. And `radix-ui` is now a real dependency rather than a transitive one.
+
+**Four things found only by looking at the running app**, none of which a type
+checker or a linter would ever have caught:
+
+- **The thread list vanished when collapsed**, which took away the main thing a
+  sidebar is for. It is now one button that reopens the panel — a thread has no
+  icon, so rendering four of them on the rail would have been four identical
+  blank squares.
+- **`SidebarInset` needed `min-w-0`.** Without it that flex child refuses to
+  shrink below its content's intrinsic width, and a wide response grid pushes
+  the whole page into a horizontal scrollbar.
+- **`SidebarContent` is `overflow-auto`, which is both axes.** A sidebar has no
+  business scrolling sideways at any width, and several of its own children —
+  the rail's `-right-4`, the group action's `after:-inset-2` — render outside
+  their parent's box by design. The x-axis is clamped rather than left to
+  whichever one overhangs.
+- **`SidebarRail` set a `w-resize` cursor for a drag that does not exist.** The
+  rail only toggles on click, so the cursor was promising a resize the component
+  has never supported. Now a pointer, which is what actually happens.
+
+#### Corrected while building
+
+- **The models page asserted a rule feature 10 had already repealed.** Its copy
+  read "all of them are free tier, which is why every price reads $0.0000",
+  which was true of the placeholder list and false of the catalog feature 5 is
+  now specified to build. Reworded, and the notice now says the list widens with
+  features 5 and 10 rather than implying free tier is permanent.
+- **Cost was rendered at four decimal places**, following `CLAUDE.md`'s wording,
+  before feature 10's `$0.000000` was noticed. Now six, matching what `costUsd`
+  actually stores — which is the precision that starts mattering the moment a
+  BYOK response has a real number in it.
+- **Two more shadcn components shipped the weak focus ring** already fixed on
+  Button during feature 4 — Textarea directly, and every control that inherits
+  it. Fixed the same way, for the same measured reason.
+
+#### Verified by hand
+
+Against the running dev server, no test runner:
+
+- `pnpm format:check`, `pnpm lint`, `pnpm typecheck` and `pnpm build` all clean.
+  Ten routes in the manifest, the three API routes untouched. All screens are
+  server-rendered on demand rather than prerendered, for the sidebar-cookie
+  reason recorded above.
+- Every `--sidebar-*` token in the served CSS resolves to a `var()` pointing at
+  the existing palette. No blue anywhere.
+- `/`, `/leaderboard`, `/models`, `/sign-in` and `/t/thr_8f2k9a0001` all return
+  200, and each renders its own content — the sidebar's thread list, the empty
+  arena's invitation, the thread's placeholder turn, the leaderboard's global
+  ranking, and the catalog's formatted context windows.
+- `/t/nope` returns **404** and renders the plain not-found page, so the
+  unknown-thread rule is proven rather than asserted.
+- One transient failure worth recording: `tsc --noEmit` failed once with
+  `Cannot find module '../../app/page.js'` immediately after `app/page.tsx` moved
+  into the route group. That is Next's generated route validator gone stale, not
+  a real type error; the next `pnpm build` regenerated it and the check went
+  clean. Worth knowing before someone debugs the wrong thing after moving a page.
+
+**Not verified, and it needs eyes:** the whole thing by sight. Layout at every
+breakpoint, the sidebar collapsing and the mobile overlay, focus order through
+the shell, and the screens in both themes. This project has no browser
+automation by decision, so that is a human pass.
 
 ## Slice 3: Public visibility & sharing
 
@@ -995,8 +1357,191 @@ Anyone should be able to open a thread's link and see it, without an account, th
 
 Two leaderboards from the same votes, one for everyone, one just for the signed-in user. Each row's win rate is the big, bold number, in the accent color, with a small bar next to it, always written as "won 4 of 5," never a bare percentage or a made-up score. Smaller, quieter numbers underneath for average speed and time-to-first-token, each clearly labeled. No cost or "cheapest" stat, every model is free, so that number never means anything here. First place gets a subtle highlight, nobody else does.
 
+**Amended by feature 10.** The **global** board counts only responses that ran on
+this app's own key — `usedOwnKey = false` — so it stays exactly what it claims to
+be, an honest free-tier ranking, and its "no cost stat" rule still holds for the
+right reason rather than by accident. The **personal** board counts everything
+that person ran, free and BYOK together, since comparing a paid model against a
+free one is the entire point of bringing a key. That means the personal board
+_can_ carry a meaningful cost number; whether it should is this feature's call.
+
+The read-path index question is deliberately left open here rather than guessed
+at in feature 10's migration: the global query gains a `usedOwnKey` filter, and
+whether that wants a third column on `@@index([modelId, status])` or a partial
+index depends on the query this feature actually writes.
+
 - [ ] Decide the approach
 - [ ] Build it
+
+## Slice 5: Bring your own key
+
+### 10. Bring your own key
+
+Every model in the arena is free tier, which is the honest constraint the whole
+app is built around — and also its ceiling. The models people most want compared
+are the ones that cost money. This feature lets a signed-in person paste their own
+OpenRouter key and put a paid model in the arena beside the free ones, without
+this app ever paying for it or ever storing the key.
+
+Depends on feature 5 (the catalog has to show paid models) and feature 6 (the
+streaming and voting path has to exist to extend). Both are amended above rather
+than left to be retrofitted.
+
+- [x] Decide the approach
+- [ ] Build it
+
+#### What was decided
+
+**BYOK responses feed the personal leaderboard only.** The global board is this
+app's public claim — an honest free-tier ranking — and quietly mixing paid models
+into it would change what that number means for every visitor who never asked for
+it. There is also a selection-bias problem that no amount of votes fixes: a BYOK
+user pits an expensive model against whatever free models happen to be selected,
+so paid win rates would read better than they are. A `usedOwnKey` flag on
+`ModelResponse` is all this costs, and feature 9 filters on it. The alternative
+considered and rejected was splitting the global board into free and BYOK tiers —
+more informative in principle, but it is real UI and query work for a tier that
+stays statistically thin for a long time.
+
+**The key lives in the browser session and is never written down.** Held in
+`sessionStorage`, sent with the calls that spend it, and gone when the tab closes,
+with an explicit "Forget my key" control so nobody has to close a tab to revoke.
+Not `localStorage`, which is durable on disk; not React state alone, which loses
+the key on every refresh — annoying enough that people paste their keys into a
+notes file, which is strictly worse than either.
+
+The rejected alternative was encrypting keys at rest in a `UserApiKey` table. It
+reads more professional and buys two real things — the key crosses the wire once
+instead of per call, and `/api/chat`'s hardened body stays untouched — but its
+worst case is unbounded and discovered late: a database dump plus the encryption
+secret is every user's paid provider key. And the encryption buys less than it
+looks like, because `KEY_ENCRYPTION_SECRET` would sit in the same environment as
+`DATABASE_URL`, so one env leak takes both halves. Doing that properly means
+envelope encryption against a KMS, which is infrastructure this project does not
+have and should not grow in order to hold other people's spending credentials.
+Session-only has failure modes too, but every one of them is preventable with
+something inside this repo — see the mitigations below.
+
+Also rejected: **calling OpenRouter from the browser.** It is the strongest
+option on custody alone, since the server would never see the key at all, and it
+is fatal on everything else. Arcjet stops applying to those calls entirely, so
+the app becomes an uncontrolled front end for arbitrary OpenRouter traffic. And
+timings and content would become client-reported, inverting the trust boundary
+feature 3 spent four review rounds building — fabricated tokens/sec written
+straight into the database of an app whose entire claim is honest measurement.
+
+**The key travels as a header, not in the body.** `X-Arena-Provider-Key` on
+`POST /api/chat`, which means the key crosses the wire three times per prompt —
+once per parallel call — because `/api/chat` is where a provider is actually
+called. It deliberately does not go to `/api/turns`, which spends nothing.
+
+The header rather than the body is a security choice, not a style one.
+`/api/chat`'s body is `{ modelResponseId }` and `.strict()`, and that shape is
+the conclusion of four rounds of review that ended with deleting inputs rather
+than validating them. Threading a credential back into it would reverse exactly
+that direction. A header also keeps "never log the request body" true as a flat
+rule with no exception, and headers are what logging and observability tools
+already redact by convention while bodies get captured wholesale. Not
+`Authorization` — that is Clerk's.
+
+**The money gate moves from `/api/turns` to `/api/chat`, and the invariant is one
+sentence: this app's own key is only ever used for a `:free` model id.**
+`/api/turns` currently rejects a paid id outright, which cannot stand once paid
+ids are legitimate. So `freeModelIdSchema` splits — a `modelIdSchema` that checks
+shape (`author/slug`, `:free` optional) and a pure `isFreeModelId` predicate.
+`/api/turns` validates shape only. `/api/chat` reads `modelId` off the reserved
+row, and if it is not free and no key header arrived, it refuses before the
+provider is called.
+
+That is the same structural move the codebase already made twice: decide from
+what the server can read, not from what the caller claims. A client flag saying
+"trust me, I have a key" would be the wrong shape even though it happens to be
+safe here, and one check at one call site is something a person can verify by
+reading a single function.
+
+**`usedOwnKey` records what actually happened, never what was claimed.** It is
+set by the same code that chooses which key to hand the provider, so the column
+is derived from the branch that was taken. It is not a request field and there is
+no path by which a caller can set it.
+
+**BYOK calls still cost an Arcjet token.** The bucket was sized in model calls to
+protect this app's money, and a BYOK call spends someone else's — but the bucket's
+real meaning is "how much work this app will do for one person", which is
+unchanged. Making BYOK calls free of the bucket would turn the app into an open
+proxy limited only by the user's own balance. No code change, which is the best
+kind of decision.
+
+**No key-validation endpoint.** A `GET` that pings OpenRouter's `/key` to say
+"valid" before the first prompt is genuinely nice, and it is one more route that
+handles a secret in exchange for feedback the first prompt delivers in seconds
+anyway. The bad-key sentence below covers it.
+
+**One provider, one key.** OpenRouter only. A direct Anthropic or OpenAI key
+would mean a second provider integration, a second usage/metrics shape, and a
+second error mapping, for models OpenRouter already carries.
+
+#### The three mitigations, as requirements rather than good intentions
+
+Session-only storage is safe because of these, so they are part of the build, not
+advice attached to it.
+
+1. **The key input is masked from PostHog session replay before replay is ever
+   switched on.** Written into feature 6 above as well, since that is where replay
+   lands. A key typed into an unmasked field is captured in the recording, and
+   this is the most probable leak in the whole design.
+2. **The `/api/chat` request, its headers, and its body are never logged,
+   serialized into an error, or attached to a PostHog event property or an Arcjet
+   characteristic.** The route already logs only the provider exception and shows
+   a plain sentence; that was cosmetic before and is load-bearing now.
+3. **The key is read once, in one function, into a local, and passed directly to
+   the provider factory.** It is never stored on a module-level value, never put
+   on the `ModelResponse` row, and the provider instance built from it is
+   per-request — which also means `features/models/openrouter.ts`'s module-level
+   singleton stops being the only way a provider gets made.
+
+#### Failure modes, and the sentences for them
+
+Three provider failures become worth telling apart, because the fix differs. Any
+other failure keeps the existing generic sentence.
+
+- **Paid model selected, no key present** → refused before the provider is
+  called. "That model needs your own API key."
+- **Key rejected by OpenRouter (401)** → "OpenRouter didn't accept that key."
+  This one matters most: swallowed into the generic "That model didn't answer",
+  a single wrong character would look like every paid model being broken.
+- **Key out of credit (402)** → "That key is out of credit."
+
+None of these echo a provider payload, and none of them can contain the key.
+
+#### The Postman collection changes with it
+
+No new routes, but two existing ones change shape, and one existing request
+becomes a lie the moment this ships:
+
+- **"Paid model → 400" on `/api/turns` must be rewritten**, because a paid id is
+  now a legitimate 201. It becomes the `/api/chat` refusal instead.
+- **`/api/chat` with a paid model and no key header → 400.**
+- **A BYOK happy path**, marked manual like the two 403 requests already are,
+  since it needs a real key and real credit that cannot live in the collection.
+- The environment template gains a `providerKey` variable, left empty, and the
+  collection itself still holds no secrets.
+
+#### The build checklist
+
+- [ ] Split `freeModelIdSchema` into `modelIdSchema` + `isFreeModelId`; loosen
+      `/api/turns` to shape-only validation
+- [ ] Migration: `usedOwnKey Boolean @default(false)` on `ModelResponse`
+- [ ] Per-request provider construction in `features/models/openrouter.ts`
+- [ ] The money gate and the three error sentences in `/api/chat`
+- [ ] `usedOwnKey` written from the branch actually taken
+- [ ] Key entry, masking, and "Forget my key" in feature 5's picker
+- [ ] Cost shown on the response card (feature 6's corrected rule)
+- [ ] Postman collection updated, including the rewritten "Paid model" request
+- [ ] `pnpm check` and `pnpm build`, then verified by hand with a real key
+
+#### Verified by hand
+
+_Nothing yet — this feature is decided, not built._
 
 ## Not doing right now
 
