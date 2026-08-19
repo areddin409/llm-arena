@@ -1,5 +1,8 @@
 import { ArenaScreen } from "@/features/arena/arena-screen";
-import { fetchCatalog } from "@/features/models/catalog";
+import {
+  CATALOG_CONVENIENCE_BUDGET_MS,
+  fetchCatalogWithin,
+} from "@/features/models/catalog";
 import { defaultSelection } from "@/features/models/default-selection";
 import {
   findPlaceholderThread,
@@ -35,7 +38,11 @@ export default async function ThreadPage({
   // its previous turn's models — a better answer than any global preference and
   // one the database already holds. That query is feature 7's, so this falls
   // back to the catalog default until the thread is real.
-  const catalog = await fetchCatalog();
+  //
+  // Budgeted like the empty arena, and more so: a thread already has answers
+  // worth reading on it, so holding them back to decide which chips to
+  // pre-select would be trading the page's actual content for a convenience.
+  const catalog = await fetchCatalogWithin(CATALOG_CONVENIENCE_BUDGET_MS);
 
   return (
     <ArenaScreen

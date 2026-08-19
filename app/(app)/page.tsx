@@ -1,5 +1,8 @@
 import { ArenaScreen } from "@/features/arena/arena-screen";
-import { fetchCatalog } from "@/features/models/catalog";
+import {
+  CATALOG_CONVENIENCE_BUDGET_MS,
+  fetchCatalogWithin,
+} from "@/features/models/catalog";
 import { defaultSelection } from "@/features/models/default-selection";
 
 /**
@@ -12,9 +15,16 @@ import { defaultSelection } from "@/features/models/default-selection";
  * stay behind `/api/models` and are fetched if and when the picker is opened.
  * A catalog that cannot be reached yields no chips and the composer says so,
  * rather than the page failing.
+ *
+ * **On a budget, because this page does not need the catalog to exist.** The
+ * arena is a prompt box and a send button; which chips are pre-selected is a
+ * convenience on top. Waiting `fetchCatalog`'s full timeout would hold the whole
+ * screen blank for eight seconds during an upstream stall, so the wait is capped
+ * and the fallback is simply no chips — which the composer already handles,
+ * since it is the same state as removing every model by hand.
  */
 export default async function ArenaPage() {
-  const catalog = await fetchCatalog();
+  const catalog = await fetchCatalogWithin(CATALOG_CONVENIENCE_BUDGET_MS);
 
   return (
     <ArenaScreen

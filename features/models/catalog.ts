@@ -154,6 +154,43 @@ export async function fetchCatalog(): Promise<CatalogResult> {
 }
 
 /**
+ * The catalog, or a plain failure if it does not arrive within `budgetMs`.
+ *
+ * `FETCH_TIMEOUT_MS` is the right ceiling for a request whose *whole purpose* is
+ * the catalog — `/api/models` and the `/models` page have nothing to show
+ * without it, and a caller waiting on them is waiting on it by definition. It is
+ * far too long a ceiling for a caller that merely wants the catalog: the arena
+ * renders a whole screen whose only use for it is which chips to pre-select, and
+ * a stalled upstream would hold that page blank for eight seconds to decide a
+ * nicety.
+ *
+ * So the deadline belongs to the caller rather than to the fetch. Callers that
+ * need the catalog wait `fetchCatalog`'s full timeout; callers that would rather
+ * proceed without it say how long they will wait.
+ *
+ * **The underlying fetch is not aborted, on purpose.** It is raced, not
+ * cancelled, so a slow response still lands in Next's cache and the next request
+ * gets it for free. Abandoning the wait should not also abandon the work.
+ */
+export async function fetchCatalogWithin(
+  budgetMs: number,
+): Promise<CatalogResult> {
+  const deadline = new Promise<CatalogResult>((resolve) => {
+    setTimeout(() => resolve({ ok: false }), budgetMs);
+  });
+
+  return Promise.race([fetchCatalog(), deadline]);
+}
+
+/**
+ * How long a caller waits when the catalog is a convenience rather than the
+ * point. Long enough that a healthy fetch — around 250ms, and a cache hit is
+ * instant — is never cut off; short enough that a hung upstream costs a blink
+ * rather than the eight seconds `fetchCatalog` will wait on its own.
+ */
+export const CATALOG_CONVENIENCE_BUDGET_MS = 1_500;
+
+/**
  * Which of these model ids OpenRouter no longer lists.
  *
  * Feature 1 parked this check ("the live free-tier list should also be checked
@@ -171,7 +208,12 @@ export async function fetchCatalog(): Promise<CatalogResult> {
 export async function withdrawnModelIds(
   ids: readonly string[],
 ): Promise<readonly string[]> {
-  const catalog = await fetchCatalog();
+  // On the convenience budget for the same reason it is allowed to fail open:
+  // this stands in front of a database write and is a courtesy, not a
+  // safeguard. Making someone wait eight seconds to create a turn, so that a
+  // check which is permitted to return nothing can return nothing, is the worst
+  // of both.
+  const catalog = await fetchCatalogWithin(CATALOG_CONVENIENCE_BUDGET_MS);
 
   if (!catalog.ok) return [];
 

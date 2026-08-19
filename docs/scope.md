@@ -947,8 +947,13 @@ column is finally worth reading once not every row is zero. The key-entry contro
 lives in this picker rather than on a settings screen, because this is where the
 need actually arises and there is no app shell until feature 7.
 
+_One word of that is now out of date: paid models are listed but **not**
+selectable, because feature 10 is decided and unbuilt, so a selectable paid row
+would lead nowhere. See "What was decided" below, which records why, and feature
+10's own checklist, which still owns turning them on._
+
 - [x] Decide the approach
-- [ ] Build it
+- [x] Build it
 
 #### What the live list actually says
 
@@ -1228,6 +1233,39 @@ another on, and it closes on the second action rather than the first. The check
 reads the selection array of the render the toggle happened in, so `length + 1`
 is the count about to exist — no effect watching the selection, and no frame
 where the panel is open against a full list.
+
+#### Corrected in review
+
+**The catalog's timeout belonged to the caller, not to the fetch.** One
+`FETCH_TIMEOUT_MS` of 8s covered every caller, which is the right ceiling for
+`/api/models` and the `/models` page — the catalog is their entire content, so a
+caller waiting on them is waiting on it by definition. It was badly wrong for the
+three callers that only want it: the arena is a prompt box and a send button, and
+which chips are pre-selected is a convenience on top, so a stalled upstream held
+the whole screen blank for eight seconds to decide a nicety. `POST /api/turns`
+was worse, since its catalog check is explicitly allowed to return nothing —
+making someone wait eight seconds so a courtesy can decline to answer is the
+worst of both.
+
+`fetchCatalogWithin(budgetMs)` splits the two, on a shared
+`CATALOG_CONVENIENCE_BUDGET_MS` of 1.5s: long enough that a healthy fetch (~250ms,
+and a cache hit is instant) is never cut off, short enough that a hang costs a
+blink. **The underlying fetch is raced, not aborted**, so a slow response still
+lands in Next's cache and the next request gets it free — abandoning the wait
+should not also abandon the work.
+
+Proven by pointing `MODELS_URL` at a blackholed IP, which hangs rather than
+failing fast, so the deadline is genuinely exercised:
+
+| Surface           | Before | After     |                           |
+| ----------------- | ------ | --------- | ------------------------- |
+| `/`               | ~8s    | **1.59s** | renders, no chips         |
+| `/t/[threadId]`   | ~8s    | **1.64s** | renders, thread intact    |
+| `POST /api/turns` | ~8s    | **2.96s** | 201, check degraded       |
+| `/models`         | 8.08s  | 8.08s     | unchanged — it needs it   |
+| `GET /api/models` | 8.20s  | 8.20s     | unchanged — 503 as before |
+
+Reverted afterwards and confirmed back to 0.13s with all three chips.
 
 #### Verified by hand
 
