@@ -87,6 +87,28 @@ export const arcjetWrite = arcjet({
   ],
 });
 
+/**
+ * For `GET /api/models` — the catalog the picker reads.
+ *
+ * Shield and bot detection only, and **no `userId` characteristic**, because
+ * this is the one route in the app that does not require a session. Feature 8's
+ * rule is that only sending a prompt and voting need sign-in, and a catalog is
+ * neither; the `/models` page renders the same list to anyone. Arcjet falls back
+ * to its own client fingerprint here, which is the right key for a route with no
+ * user to key on.
+ *
+ * No token bucket, for the reason `arcjetWrite` gives: the bucket is denominated
+ * in model calls and this route calls no model. It reads a value Next has cached
+ * for an hour, so a burst against it costs one upstream fetch at most.
+ */
+export const arcjetPublic = arcjet({
+  key: env.ARCJET_KEY,
+  rules: [
+    shield({ mode: "LIVE" }),
+    detectBot({ mode: "LIVE", allow: ["CURL", "POSTMAN"] }),
+  ],
+});
+
 export type Refusal = {
   readonly sentence: string;
   readonly status: number;

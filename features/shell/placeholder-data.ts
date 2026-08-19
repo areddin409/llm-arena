@@ -6,7 +6,7 @@
  * - `PLACEHOLDER_THREADS` goes when feature 7 reads real threads.
  * - `PLACEHOLDER_TURN` goes when feature 6 streams real answers.
  * - `PLACEHOLDER_RANKINGS` goes when feature 9 queries real votes.
- * - `PLACEHOLDER_CATALOG` goes when feature 5 pulls OpenRouter's live list.
+ * - `PLACEHOLDER_CATALOG` is gone; feature 5 pulls OpenRouter's live list.
  *
  * Nothing here is invented from nowhere: the model ids, speeds and token counts
  * are the real measurements recorded in this file's sibling, docs/scope.md.
@@ -161,48 +161,16 @@ export const PLACEHOLDER_RANKINGS: readonly PlaceholderRanking[] = [
   },
 ];
 
-export type PlaceholderCatalogEntry = {
-  readonly modelId: string;
-  readonly modelName: string;
-  readonly author: string;
-  readonly contextWindow: number;
-};
-
-export const PLACEHOLDER_CATALOG: readonly PlaceholderCatalogEntry[] = [
-  {
-    modelId: "nvidia/nemotron-3.5-lightning:free",
-    modelName: "Nemotron 3.5 Lightning",
-    author: "NVIDIA",
-    contextWindow: 262144,
-  },
-  {
-    modelId: "inclusionai/ling-3.0-tiny:free",
-    modelName: "Ling 3.0 Tiny",
-    author: "InclusionAI",
-    contextWindow: 131072,
-  },
-  {
-    modelId: "google/gemma-4-26b-a4b-it:free",
-    modelName: "Gemma 4 26B",
-    author: "Google",
-    contextWindow: 131072,
-  },
-  {
-    modelId: "google/gemma-4-31b-it:free",
-    modelName: "Gemma 4 31B",
-    author: "Google",
-    contextWindow: 65536,
-  },
-  {
-    modelId: "qwen/qwen3-8b:free",
-    modelName: "Qwen3 8B",
-    author: "Qwen",
-    contextWindow: 40960,
-  },
-  {
-    modelId: "mistralai/mistral-small-3.2:free",
-    modelName: "Mistral Small 3.2",
-    author: "Mistral",
-    contextWindow: 32768,
-  },
-];
+/*
+ * `PLACEHOLDER_CATALOG` was here and is gone: feature 5 reads OpenRouter's live
+ * list, so `features/models/catalog.ts` is the catalog now.
+ *
+ * Deleting it turned up something worth leaving a note about. Three of its six
+ * model ids — `inclusionai/ling-3.0-tiny:free`, `qwen/qwen3-8b:free` and
+ * `mistralai/mistral-small-3.2:free` — had already been withdrawn from
+ * OpenRouter's free tier within days of being written down. The same ids are
+ * still in `PLACEHOLDER_TURN` and `PLACEHOLDER_RANKINGS` above, which belong to
+ * features 6 and 9 and were left alone rather than quietly widened into this
+ * step. They are stand-ins either way; they are just staler stand-ins than they
+ * look, and whoever replaces them should not be surprised.
+ */

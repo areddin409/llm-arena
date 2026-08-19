@@ -39,7 +39,7 @@ export function ResponseColumn({ response, axisMs }: ResponseColumnProps) {
   const hasWon = response.state === "winner";
 
   return (
-    <article className="flex w-full min-w-0 flex-col rounded-xl border border-border bg-card">
+    <article className="flex w-full min-w-0 flex-col surface">
       <header className="flex items-start justify-between gap-3 px-4 pt-4">
         <div className="flex min-w-0 items-center gap-2">
           <ModelMark modelId={response.modelId} />
@@ -54,8 +54,15 @@ export function ResponseColumn({ response, axisMs }: ResponseColumnProps) {
             Won
           </Badge>
         ) : (
+          // Three "Pick this" buttons side by side are three identical
+          // accessible names in a list of controls that do different things.
+          // The visible label stays short because the card names the model
+          // right beside it; the sentence is what a screen reader reads out.
           <Button variant="outline" size="xs" disabled={hasFailed}>
-            Pick this
+            <span aria-hidden="true">Pick this</span>
+            <span className="sr-only">
+              Vote for {response.modelName} as the best answer
+            </span>
           </Button>
         )}
       </header>

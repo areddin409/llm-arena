@@ -233,6 +233,27 @@
   text-transform: uppercase;
 }
 
+/*
+ * The raised panel every screen is built out of: a response card, the composer,
+ * the catalog table. It was `rounded-xl border border-border bg-card` written by
+ * hand in three files, which is exactly the "same handful of classes in three
+ * places" this project's rules call a component.
+ *
+ * It is a utility rather than an adoption of shadcn's vendored `Card`, and that
+ * is a correction to what feature 5 originally planned. `Card` carries
+ * `flex flex-col gap-6 py-6 shadow-sm` on top of the shell, and not one of the
+ * three sites wants any of it — the response card is flush to its timing rail,
+ * the composer sets `p-3`, and the table wrapper has no padding at all. Adopting
+ * it would have meant cancelling four utilities at every call site, which is
+ * more copy-pasted classes than it removes. `Card` was deleted rather than left
+ * sitting unused.
+ */
+@utility surface {
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  background-color: var(--card);
+}
+
 /* Every measured number in the app: ms, tokens/sec, token counts, win rates.
    Tabular figures so a column of them lines up and a streaming number does not
    jitter as its digits change. */
