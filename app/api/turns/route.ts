@@ -1,4 +1,5 @@
 import { badRequest, plainly } from "@/features/http/plain-response";
+import { withdrawnModelIds } from "@/features/models/catalog";
 import { arcjetWrite } from "@/features/security/arcjet";
 import { guard } from "@/features/security/guard";
 import {
@@ -42,6 +43,25 @@ export async function POST(request: Request): Promise<Response> {
 
   if (!parsed.success) {
     return badRequest();
+  }
+
+  // The schema above proves the id is well-formed and free-tier; this asks
+  // whether it still exists. OpenRouter withdraws free models constantly, so an
+  // id a browser tab has been holding for an hour may already be gone, and the
+  // alternative to catching it here is three streams failing one by one with a
+  // generic sentence. Silent when the catalog is unreachable — see
+  // `withdrawnModelIds`.
+  const withdrawn = await withdrawnModelIds(
+    parsed.data.models.map((model) => model.id),
+  );
+
+  if (withdrawn.length > 0) {
+    return plainly(
+      withdrawn.length === 1
+        ? "One of those models isn't available any more. Pick another one."
+        : "Some of those models aren't available any more. Pick others.",
+      400,
+    );
   }
 
   const result = await createTurn(guarded.userId, parsed.data);

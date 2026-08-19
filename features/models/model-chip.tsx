@@ -8,6 +8,7 @@ type ModelChipProps = {
   readonly modelId: string;
   /** OpenRouter's display name, `Vendor: Model`. Shown whole, then truncated. */
   readonly modelName: string;
+  readonly onRemove: () => void;
   readonly className?: string;
 };
 
@@ -30,11 +31,13 @@ type ModelChipProps = {
  * same trap set for the next person.
  *
  * The top bar's win chips are still `Badge`es: nothing in them takes focus.
- *
- * Feature 5 hands this an `onRemove` and makes the button do something. Until
- * then it renders inert, like every other control on this branch.
  */
-export function ModelChip({ modelId, modelName, className }: ModelChipProps) {
+export function ModelChip({
+  modelId,
+  modelName,
+  onRemove,
+  className,
+}: ModelChipProps) {
   return (
     <span
       className={cn(
@@ -44,7 +47,13 @@ export function ModelChip({ modelId, modelName, className }: ModelChipProps) {
     >
       <ModelMark modelId={modelId} size="sm" />
       <span className="max-w-32 truncate">{modelName}</span>
-      <Button variant="ghost" size="icon-xs" className="rounded-full">
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-xs"
+        className="rounded-full"
+        onClick={onRemove}
+      >
         <XIcon />
         <span className="sr-only">Remove {modelName} from this turn</span>
       </Button>

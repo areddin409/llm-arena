@@ -22,7 +22,7 @@ There are rough hand-drawn sketches for the arena screen, the leaderboard, and t
 | 2   | Coding standards & tooling                  | Foundation | done        |
 | 3   | Data model                                  | Foundation | done        |
 | 4   | Design & look                               | Foundation | done        |
-| 5   | Model picker                                | Slice 1    | not started |
+| 5   | Model picker                                | Slice 1    | done        |
 | 6   | Send a prompt, parallel streams, and voting | Slice 1    | not started |
 | 7   | App shell & thread history                  | Slice 2    | UI built    |
 | 8   | Public thread visibility & sharing          | Slice 3    | not started |
@@ -947,8 +947,362 @@ column is finally worth reading once not every row is zero. The key-entry contro
 lives in this picker rather than on a settings screen, because this is where the
 need actually arises and there is no app shell until feature 7.
 
-- [ ] Decide the approach
-- [ ] Build it
+_One word of that is now out of date: paid models are listed but **not**
+selectable, because feature 10 is decided and unbuilt, so a selectable paid row
+would lead nowhere. See "What was decided" below, which records why, and feature
+10's own checklist, which still owns turning them on._
+
+- [x] Decide the approach
+- [x] Build it
+
+#### What the live list actually says
+
+The approach below was decided against the real `GET /api/v1/models` response
+rather than against a memory of its shape, and five things in it changed the
+design. Recorded because each one is a trap that would otherwise be discovered
+mid-build.
+
+- **415 models, 680 KB of JSON, and only 17 of them free.** The payload size
+  alone rules out handing the raw list to the browser.
+- **The free tier churns hard.** Of the six ids in `placeholder-data.ts` —
+  written days earlier from real measurements — **three were already gone**:
+  `inclusionai/ling-3.0-tiny:free`, `qwen/qwen3-8b:free` and
+  `mistralai/mistral-small-3.2:free`. Nothing about this catalog can be
+  snapshotted, and feature 3's decision to store `modelName` as a snapshot beside
+  `modelId` is vindicated harder than it was argued.
+- **Sorting free models by context window puts NVIDIA, NVIDIA, Dots Studio in
+  the top three**, so the naive default selection is two models from one
+  provider — the exact collision feature 4 spent a build fixing in the model
+  mark.
+- **OpenRouter's display name already carries the suffix**:
+  `NVIDIA: Nemotron 3.5 Lightning (free)`. The placeholder data omits it, so a
+  chip built straight from the live name would read `…Lightning (free)` beside a
+  badge saying the same word.
+- **Pricing is USD per token, as a string.** `"0.00001"` is $10 per million, not
+  $0.00001 per million. And 13 models output image or audio, which are not
+  candidates for a text arena.
+
+#### What was decided
+
+**The catalog is fetched and cached on the server, and served to the picker over
+`GET /api/models`.** One module, `features/models/catalog.ts`, fetches with
+`next: { revalidate: 3600 }`, keeps only models whose output modalities are
+exactly `["text"]`, and trims each entry to id, name, context window, prompt and
+completion price, and a `free` flag — roughly 40 KB instead of 680 KB. The
+`/models` page reads that module directly as a server component; the picker reads
+the route.
+
+The alternative was passing the trimmed catalog down as props into a client
+picker, with no route at all. It is tempting, since RSC makes it free of
+plumbing, and it was rejected on payload: 400 rows would be re-serialized into
+every arena page load, `/` and every `/t/[threadId]`, to serve a popover most
+visits never open. A route is fetched once on first open and cached by the
+browser. The route is public — feature 8 already says only sending and voting
+need sign-in — with Arcjet shield and bot detection but no token-bucket cost,
+since it spends nothing upstream, exactly like `/api/turns` and `/api/votes`.
+
+**Freeness for display comes from `pricing`, not from the id.** Three
+zero-priced models do not carry `:free`, and `openrouter/free` is a router
+pseudo-model rather than a model. The `:free` suffix stays the _money gate_ —
+feature 10's invariant that this app's own key is only ever used for a `:free`
+id is unaffected and is conservatively wrong in the safe direction, since a
+zero-priced non-`:free` model is merely refused without a key. `pricing.prompt`
+being `"0"` is the _display_ fact, and the two are deliberately not merged.
+
+**The default selection is derived on every visit and never stored:** the top
+free models by context window, **one per author**, capped at three, falling back
+to allowing a repeated author only if fewer than three authors have a free model.
+The one-per-author rule exists because the data demands it — the raw sort gives
+two NVIDIA models — and it costs one `reduce`.
+
+`localStorage` for the selection was rejected. A persisted id is dead within a
+week at the observed churn rate, so it would need reconciliation against the
+catalog on every load: dropping unknown ids, topping back up from the default.
+That is machinery bought to solve a problem deriving does not have. On
+`/t/[threadId]` the selection instead comes from the thread's own previous turn,
+which is both more correct than a global preference and already in the database.
+That query is feature 7's, but the rule is recorded here so it is not invented
+twice.
+
+**`/api/turns` gains a catalog check that is best-effort and never blocking.**
+Feature 1 parked this — "feature 5's live free-tier list should also be checked
+against once it exists" — and churn is what makes it worth collecting: an id that
+was valid last week is now the common failure, not an exotic one, and it
+currently surfaces as a provider error at call time. So an id absent from the
+catalog becomes a plain 400 saying the model is no longer available. But if the
+catalog fetch itself fails, the check degrades to today's shape-only validation
+rather than refusing writes. An OpenRouter outage must not take the write path
+down with it, and the money gate does not depend on this check.
+
+**A catalog fetch failure is a plain sentence and a retry, with no fallback
+snapshot.** Vendoring a last-known-good list is the obvious mitigation and it is
+the wrong one here: at the observed churn it would confidently offer models that
+no longer exist, which is worse than saying the list is unavailable.
+
+**Popover with `cmdk` on desktop, the already-vendored `Sheet` on mobile**, split
+by the existing `use-mobile` hook. 400 rows needs real search and listbox
+keyboard navigation, which is what shadcn's combobox pattern is; a hand-rolled
+filtered `Input` would be re-deriving it badly. `Sheet` rather than adding `vaul`
+for a Drawer, since the component is already in the repo doing the sidebar's
+mobile panel. The initial open renders a top slice by context window with a
+prompt to type rather than mounting 400 nodes. Expect the usual audit tax on
+anything newly vendored: the 3px 50%-opacity focus ring and `text-white` on
+destructive have now been found in six shadcn components and should be assumed
+present in the seventh.
+
+**Paid models are listed but not selectable until feature 10 lands.** The picker
+shows the whole catalog with real pricing and a free/paid marker from day one;
+a paid row is disabled and says in a plain sentence that it needs your own
+OpenRouter key. Feature 10 then flips those rows on and adds the key entry,
+masking, and "Forget my key" its checklist already assigns to this picker.
+
+The two alternatives were building features 5 and 10 as one step — no dead end
+and no rework, but it merges two features' verification passes and roughly
+doubles the step — and shipping a free-only picker, which is the smallest honest
+step but means the search box silently cannot find a paid model someone types,
+while `/models` beside it lists 400 of them. Disabled-with-a-reason was chosen
+because the row layout, the price column and the free marker are identical work
+under all three options, so nothing is built twice, and a disabled row carrying
+its reason is a signpost rather than a dead end.
+
+**A `modelDisplayName` helper strips a trailing ` (free)`**, living beside
+`modelShortName` for the same reason `modelAuthor` lives beside the id schema:
+both are statements about OpenRouter's name format. The free state is already its
+own marker, so repeating it in the label is noise.
+
+**Two pieces of the 2026-08-18 review's parked debt are paid here, and one is
+not.** The card shell copy-pasted as `rounded-xl border border-border bg-card`
+gets replaced by the vendored `Card` on the catalog page and in the picker. The
+`Metric` / `Detail` duplication stays with feature 6, which rebuilds the response
+card anyway and is where `Metric` actually lives. Also taken here, since this
+feature owns the screen: the missing `<h1>` on the arena and the per-model "Pick
+this" buttons having no unique accessible name.
+
+#### The build checklist
+
+- [x] `features/models/catalog.ts` — fetch, revalidate, text-output filter, trim
+- [x] `GET /api/models`, public, shield and bot detection, no bucket cost
+- [x] `stripFreeSuffix`, and freeness read from `pricing` rather than the id
+- [x] The picker: Popover + `cmdk` desktop, `Sheet` mobile, search, cap of three
+- [x] Derived default selection, one model per author
+- [x] Paid rows listed, unselectable, carrying their reason
+- [x] Chips wired to real state, `ModelChip`'s `onRemove` finally doing something
+- [x] `/models` rendering the live catalog with real per-million pricing
+- [x] Best-effort catalog check in `/api/turns`, degrading to shape-only
+- [x] Catalog-unavailable sentence and retry, on both surfaces
+- [x] Delete `PLACEHOLDER_CATALOG` and the catalog `PlaceholderNotice`
+- [x] The `surface` utility (not `Card` — see below); arena `<h1>`; unique names
+      on the per-model buttons
+- [x] `GET /api/models` in the Postman collection, happy path and failure
+- [x] `pnpm check` and `pnpm build`, then verified by hand
+
+#### Corrected while building
+
+Five things in the plan above were wrong, and one of them was wrong in the
+expensive direction.
+
+- **`/models` as a server component was backwards, by a factor of four.** The
+  plan said rendering the table on the server would "keep the catalog out of the
+  browser entirely". That is not what a server component does: React serializes
+  the whole _rendered tree_ into the RSC flight payload, so the browser receives
+  the rows twice over — once as HTML, once as flight data. Measured on a
+  production build, not in dev: 396 rows came to **1.03 MB**, of which 778 KB was
+  flight payload. The same rows as plain data are 65 KB.
+
+  So the table became a client component fed by the server, which cut the flight
+  payload to 89 KB, and it pays for a search box that the "server component"
+  framing had been used to argue against. The page is now **233 KB**.
+
+  The lesson generalises and is worth not relearning: a server component is not
+  a way to render a lot of rows cheaply. It moves _code_ off the client, not
+  markup.
+
+- **A `"use client"` component is still server-rendered**, which is what made the
+  remaining 620 KB. Hydration needs the HTML, so every row costs markup wherever
+  the component is declared. That is why the paid table reveals **50 rows at a
+  time** rather than all 379 — incremental disclosure, one piece of state,
+  remounted by `key={query}` so a search resets it without an effect. Numbered
+  pages were the alternative and were turned down: they add page state and the
+  "which page was that model on" problem, for orientation the group counts
+  already give.
+
+- **Adopting shadcn's `Card` was the wrong fix for the copy-pasted card shell.**
+  The 2026-08-18 review was right that `rounded-xl border border-border bg-card`
+  in three files is a component, and wrong about which one. `Card` also carries
+  `flex flex-col gap-6 py-6 shadow-sm`, and not one of the three sites wants any
+  of it — the response card is flush to its timing rail, the composer sets `p-3`,
+  the table wrapper has no padding. Adopting it meant cancelling four utilities
+  per call site, which is more copy-pasted classes than it removes. It is a
+  `@utility surface` in `globals.css` instead, which is what this project's own
+  rule actually prescribes, and `Card` was deleted rather than left unused.
+
+- **`Detail` and `Metric` stopped being a duplicate pair without being merged.**
+  The plan parked that for feature 6. `Detail` lived on the catalog card grid,
+  which the table replaced, so it is simply gone. `Metric` stays where it was.
+
+- **The catalog is no longer OpenRouter's list verbatim; routers are excluded.**
+  `openrouter/free`, `openrouter/fusion` and their siblings are routing policies
+  that pick some other model per request. An arena whose entire output is a
+  ranking cannot include a row meaning "whichever one it chose that time" —
+  every vote it won would be attributed to nothing. Found because
+  `openrouter/free` is genuinely zero-priced, so it landed in the picker's free
+  group while `freeModelIdSchema` would have refused the same id at
+  `POST /api/turns` for lacking the `:free` suffix. The picker must only offer
+  what the API accepts, and after the exclusion that invariant holds exactly:
+  every model shown as free passes the money gate, checked against the live list
+  rather than assumed.
+
+#### Found while building
+
+- **The free tier churns faster than anything in this repo assumed.** Three of
+  the six ids in `placeholder-data.ts` — `inclusionai/ling-3.0-tiny:free`,
+  `qwen/qwen3-8b:free`, `mistralai/mistral-small-3.2:free` — were already
+  withdrawn, days after being written down from real measurements. This is the
+  fact behind three separate decisions: no vendored fallback snapshot, no
+  persisted selection, and the withdrawn-model check on `POST /api/turns`.
+
+  It also meant **the Postman collection had gone stale on its own**, which no
+  amount of discipline about updating it would have caught: `modelIdB` was one of
+  the withdrawn ids, so the collection's own happy paths would have started
+  returning 400. Fixed twice over — the ids are current, and the
+  "OpenRouter reference" request now captures three live free ids from three
+  different authors into `modelId`, `modelIdB` and `modelIdC`, so the collection
+  can repair itself. Capture only, never assertions, and through the same `save`
+  helper as the Setup folder so an active environment is written to rather than
+  shadowed.
+
+- **The paid catalog was almost entirely letters, and that read as unfinished.**
+  Feature 4 predicted the letter fallback would become the common path once the
+  list widened, and treated that as acceptable restraint. Seen on screen it was
+  not: a table where OpenAI, Anthropic, Meta, DeepSeek and xAI are all ringed
+  capitals looks like missing artwork rather than a decision. Eight more marks
+  are vendored from simple-icons — Amazon, Anthropic, DeepSeek, Meta (under both
+  `meta` and `meta-llama`), Microsoft, OpenAI and Perplexity — taking coverage
+  from four authors to twelve, about two thirds of the live catalog.
+
+  **Two were deliberately not added.** simple-icons carries no xAI and no Cohere,
+  and it does carry `x` — Twitter's logo, a different company that happens to
+  share a letter. Drawing it beside `x-ai/grok-4.20` would attribute a model to
+  the wrong organisation, which is worse than the plain `X` the fallback gives.
+  A near-miss mark is not better than a letter.
+
+- **Eleven models drew a literal `~` as their provider mark.** OpenRouter
+  prefixes floating aliases with a tilde — `~openai/gpt-latest` is whatever
+  OpenAI currently calls latest — and `modelAuthor` returned `~openai`, matching
+  no glyph and yielding `~` as the letter. It strips the tilde now. None of those
+  ids are free, so the money gate was never involved; this was only ever a
+  display bug, and only visible once the catalog went live.
+
+- **shadcn's `Command` shipped an invisible keyboard cursor on this palette.**
+  Upstream marks the active row with `bg-accent` alone, which works against
+  shadcn's own colors and not against ours: measured, `#2e211c` on `#241a16` is
+  **1.09:1** in dark and `#efe4d8` on `#fffbf6` is **1.22:1** in light. Arrowing
+  through 400 models, a keyboard user would have had no idea where they were.
+  Fixed with a 2px rust rule down the leading edge — 5.00:1 and 5.12:1 — which is
+  the accent doing its job, since the row you are about to choose is a thing you
+  interact with. `data-[disabled=true]:opacity-50` also became an explicit
+  `text-muted-foreground`, the fifth time half-opacity text has been corrected in
+  a vendored component here.
+
+  `CommandDialog` was deleted along with the `dialog.tsx` it dragged in. The
+  picker uses Popover and the already-vendored Sheet, so nothing needed a Dialog,
+  and leaving a component with a `focus:ring-*` defect sitting unused is a trap
+  for whoever reaches for it next.
+
+- **cmdk's `disabled` prop would have hidden 380 models from keyboard users.** It
+  removes an item from arrow navigation entirely, so every paid model — the whole
+  point of listing them — would have been mouse-only. The rows use
+  `aria-disabled` instead, which announces the state and keeps them reachable, so
+  a person can find out that the model exists and what using it would take.
+
+#### Found in the human pass
+
+The visual and keyboard pass confirmed the rest, and turned up one thing no
+check in this repo could have: **the picker stayed open after the third model was
+chosen**, in both the popover and the sheet, leaving the person to dismiss a
+panel that had nothing left to do.
+
+It reads as a small thing and it is the difference between a flow that ends and
+one that merely stops. At the cap every unchosen row is inert, so the only
+remaining move is a removal — the panel is finished and says so by closing.
+Choosing the last free slot now closes it.
+
+Only an addition that fills the last slot closes the picker. A removal never
+does, which is what keeps swapping usable: open at three, take one off, put
+another on, and it closes on the second action rather than the first. The check
+reads the selection array of the render the toggle happened in, so `length + 1`
+is the count about to exist — no effect watching the selection, and no frame
+where the panel is open against a full list.
+
+#### Corrected in review
+
+**The catalog's timeout belonged to the caller, not to the fetch.** One
+`FETCH_TIMEOUT_MS` of 8s covered every caller, which is the right ceiling for
+`/api/models` and the `/models` page — the catalog is their entire content, so a
+caller waiting on them is waiting on it by definition. It was badly wrong for the
+three callers that only want it: the arena is a prompt box and a send button, and
+which chips are pre-selected is a convenience on top, so a stalled upstream held
+the whole screen blank for eight seconds to decide a nicety. `POST /api/turns`
+was worse, since its catalog check is explicitly allowed to return nothing —
+making someone wait eight seconds so a courtesy can decline to answer is the
+worst of both.
+
+`fetchCatalogWithin(budgetMs)` splits the two, on a shared
+`CATALOG_CONVENIENCE_BUDGET_MS` of 1.5s: long enough that a healthy fetch (~250ms,
+and a cache hit is instant) is never cut off, short enough that a hang costs a
+blink. **The underlying fetch is raced, not aborted**, so a slow response still
+lands in Next's cache and the next request gets it free — abandoning the wait
+should not also abandon the work.
+
+Proven by pointing `MODELS_URL` at a blackholed IP, which hangs rather than
+failing fast, so the deadline is genuinely exercised:
+
+| Surface           | Before | After     |                           |
+| ----------------- | ------ | --------- | ------------------------- |
+| `/`               | ~8s    | **1.59s** | renders, no chips         |
+| `/t/[threadId]`   | ~8s    | **1.64s** | renders, thread intact    |
+| `POST /api/turns` | ~8s    | **2.96s** | 201, check degraded       |
+| `/models`         | 8.08s  | 8.08s     | unchanged — it needs it   |
+| `GET /api/models` | 8.20s  | 8.20s     | unchanged — 503 as before |
+
+Reverted afterwards and confirmed back to 0.13s with all three chips.
+
+#### Verified by hand
+
+Against a production build and the real OpenRouter, Clerk and database, no test
+runner:
+
+- `pnpm format:check`, `pnpm lint`, `pnpm typecheck` and `pnpm build` all clean,
+  twelve routes in the manifest with `/api/models` among them.
+- `GET /api/models` → **200, 396 models, 65 KB.** Image and audio models filtered
+  out, no routers left, sorted by context window descending, and the ` (free)`
+  suffix stripped from every name.
+- **The invariant that matters, checked rather than assumed:** every model the
+  route reports as `free` also passes `freeModelIdSchema`. Zero disagreements
+  across 396 entries.
+- `/models` → **233 KB**, down from 1.03 MB, rendering 69 rows instead of 396.
+- `/` → the composer opens with **three chips from three different authors**
+  (NVIDIA, Dots Studio, Google), which is the one-per-author rule earning its
+  keep — the raw sort by context window opens with two NVIDIA models.
+- `POST /api/turns`, with a real Clerk session token: a withdrawn free id → 400
+  and the singular sentence; two withdrawn ids → 400 and the plural one; a live
+  free id → **201** with a real thread; a paid id → 400 from the money gate,
+  before the catalog is consulted; `openrouter/free` → 400, confirming the
+  picker's exclusion and the API agree; unauthenticated → 401.
+- **The degradation path was proven by breaking it, not by reading it.**
+  `MODELS_URL` was temporarily pointed at an unresolvable host. `GET /api/models`
+  → 503 with its plain sentence; `/models` → 200 showing the unavailable alert
+  rather than an error; and `POST /api/turns` → **201**, writing the turn as
+  normal. An OpenRouter outage does not become an outage here. The withdrawn id
+  is accepted while the catalog is down, which is the intended trade. Reverted
+  afterwards and confirmed back to 200.
+
+**Confirmed by a human pass**, since this project has no browser automation by
+decision: the picker in both frames on real hardware, the rust keyboard cursor
+visible while arrowing, the composer fully keyboard operable, `/models` in both
+themes including "Show 50 more" and the table's horizontal scroll at phone
+width, and the eight new provider marks legible at chip size. One defect came out
+of it — see "Found in the human pass" above — and was fixed.
 
 ### 6. Send a prompt, parallel streams, and voting
 

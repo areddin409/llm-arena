@@ -54,7 +54,7 @@
     },
     {
       "key": "modelIdB",
-      "value": "inclusionai/ling-3.0-tiny:free"
+      "value": "openai/gpt-oss-20b:free"
     },
     {
       "key": "modelIdC",
@@ -344,6 +344,80 @@
       ]
     },
     {
+      "name": "Models",
+      "description": "The catalog the picker reads. The only route in the app that does not need a session — feature 8 says just sending a prompt and voting do, and the /models page shows anyone the same list.",
+      "item": [
+        {
+          "name": "The catalog → 200",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/models",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "models"
+              ]
+            },
+            "description": "Returns { models: [...] }, roughly 400 entries and 65 KB — OpenRouter's 415-model, 680 KB list trimmed to the six fields a screen reads, sorted by context window descending.\n\nExpect: 200. Each entry is { id, name, contextWindow, promptUsdPerMillion, completionUsdPerMillion, free }.\n\nThree things are filtered out on purpose and are worth knowing about:\n- Models that emit image or audio. The arena renders text, so there is no column to draw them in.\n- OpenRouter's own router pseudo-models (openrouter/free, openrouter/auto, openrouter/fusion). Each picks some other model per request, so a vote for one would be attributed to nothing.\n- Nothing else. Paid models are present and are meant to be — the picker lists them, disabled, until bring-your-own-key lands.\n\n\"free\" is read from pricing being zero, not from the :free suffix on the id. The suffix stays the money gate that POST /api/turns enforces.\n\nNo auth header is sent here deliberately: this route is public and it should answer anyway."
+          }
+        },
+        {
+          "name": "Catalog unavailable → 503",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/models",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "models"
+              ]
+            },
+            "description": "MANUAL — cannot be triggered from here, because it needs OpenRouter to be unreachable from the server.\n\nTo reproduce: point MODELS_URL in features/models/catalog.ts at an unresolvable host and send this again.\n\nExpect: 503 and { \"error\": \"The model list is unavailable right now. Try again in a moment.\" } — never a provider exception or a stack. 503 rather than 500 because nothing here is broken; an upstream list is briefly gone and retrying is the right answer.\n\nWorth checking at the same time: POST /api/turns must still return 201 for a well-formed free model id while the catalog is down. The withdrawn-model check degrades to shape-only rather than refusing writes, so an OpenRouter outage does not become an outage here."
+          }
+        },
+        {
+          "name": "Blocked as a bot → 403",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [
+              {
+                "key": "User-Agent",
+                "value": "python-requests/2.31.0"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/models",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "models"
+              ]
+            },
+            "description": "Expect: 403 and the shared blocked sentence, with no rule name and no Arcjet reason object.\n\nPostman's own User-Agent is on the allow list, so this overrides it. Note Postman only sends a custom User-Agent when Settings → General → \"Send Postman Token header\"-adjacent UA locking is off; if you get a 200, curl it instead.\n\nBot detection is sticky for two to three minutes afterwards — every later request from the same client is denied while the reputation decays. Do not chase a phantom failure in the other folders straight after running this."
+          }
+        }
+      ]
+    },
+    {
       "name": "Turns",
       "description": "Creates the turn a prompt belongs to, and the PENDING ModelResponse rows the parallel /api/chat calls fill in.\n\nThis endpoint exists to kill a race. One arena prompt is up to three simultaneous POSTs to /api/chat, and if each of those created the turn they share, they would collide. So none of them does — this runs first, alone, in one transaction, and hands back ids nobody else holds.\n\nIt calls no model and spends nothing upstream, so it carries no token-bucket cost. Shield and bot detection still apply.\n\n**Run \"Create a turn\" before anything in the Chat or Votes folders** — everything downstream needs the ids it saves.",
       "item": [
@@ -547,6 +621,33 @@
             "description": "A well-formed but **paid** OpenRouter id. Expect **400** and the same plain sentence as any other bad body.\n\nThis check used to live on /api/chat, because the model id used to travel in that request. It doesn't any more — /api/chat names a response row and reads the model id back off it — so the `:free` requirement moved here, to the one place an id now enters the system. Every model in this arena is free tier, so the suffix is a real requirement, not a formatting preference.\n\nNo rows are written and OpenRouter is never called."
           },
           "response": []
+        },
+        {
+          "name": "Withdrawn model → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"prompt\": \"Explain quicksort to a five-year-old.\",\n  \"models\": [\n    {\n      \"id\": \"inclusionai/ling-3.0-tiny:free\",\n      \"name\": \"InclusionAI: Ling 3.0 Tiny\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/turns",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "turns"
+              ]
+            },
+            "description": "A well-formed, free-tier-shaped id for a model OpenRouter no longer lists. inclusionai/ling-3.0-tiny:free was genuinely on the free tier when this app was first built and was withdrawn within days, which is why this case exists at all rather than being hypothetical.\n\nExpect: 400 and { \"error\": \"One of those models isn't available any more. Pick another one.\" }. Send two withdrawn ids and the sentence becomes the plural one.\n\nThe schema cannot catch this — the id is shaped correctly and carries :free. It is caught by checking the live catalog before the write, which is what turns three streams failing one by one into one plain sentence up front.\n\nIf this ever returns 201, the model came back, or the catalog was unreachable and the check degraded to shape-only. Both are intended."
+          }
         },
         {
           "name": "Same model twice → 400",
@@ -1528,21 +1629,48 @@
       "description": "OpenRouter directly, not this app. Handy for grabbing a real model id, and it's the same catalog the model picker will use in scope.md feature 5.",
       "item": [
         {
-          "name": "Free models",
+          "name": "Refresh the free model ids",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "// Print the free tier sorted by context window — the same order the picker will use.",
+                  "// Capture only, never assert — this project has no test runner.",
+                  "// Same scope rule as the Setup folder: an environment variable shadows a",
+                  "// collection variable of the same name, so write to whichever is active.",
+                  "const save = (key, value) => (pm.environment.name",
+                  "    ? pm.environment.set(key, value)",
+                  "    : pm.collectionVariables.set(key, value));",
+                  "",
+                  "// Free is read from pricing, not from the :free suffix, which is what the app",
+                  "// does — but the id still has to carry the suffix, because that suffix is the",
+                  "// money gate POST /api/turns validates against.",
                   "const free = pm.response.json().data",
-                  "    .filter((model) => model.id.endsWith(':free'))",
+                  "    .filter((m) => m.pricing && m.pricing.prompt === \"0\" && m.pricing.completion === \"0\")",
+                  "    .filter((m) => /^[w.-]+/[w.-]+:free$/.test(m.id))",
+                  "    .filter((m) => m.architecture",
+                  "        && m.architecture.output_modalities.length === 1",
+                  "        && m.architecture.output_modalities[0] === \"text\")",
                   "    .sort((a, b) => b.context_length - a.context_length);",
                   "",
-                  "console.log(free.length + ' free models. Top 10 by context window:');",
-                  "free.slice(0, 10).forEach((model) => {",
-                  "    console.log(model.context_length + '  ' + model.id);",
+                  "// One per author, so the three ids are three different providers.",
+                  "const authors = new Set();",
+                  "const picked = [];",
+                  "free.forEach((m) => {",
+                  "    const author = m.id.split(\"/\")[0];",
+                  "    if (picked.length < 3 && !authors.has(author)) {",
+                  "        authors.add(author);",
+                  "        picked.push(m);",
+                  "    }",
+                  "});",
+                  "",
+                  "console.log(free.length + \" free text models right now.\");",
+                  "[\"modelId\", \"modelIdB\", \"modelIdC\"].forEach((key, i) => {",
+                  "    if (picked[i]) {",
+                  "        save(key, picked[i].id);",
+                  "        console.log(key + \" = \" + picked[i].id + \"  (\" + picked[i].context_length + \" ctx)\");",
+                  "    }",
                   "});"
                 ]
               }
@@ -1567,7 +1695,7 @@
                 "models"
               ]
             },
-            "description": "Public, no key needed. Open the Postman console after sending — the script prints the free tier sorted by context window so you can paste an id into the modelId variable."
+            "description": "Public, no key needed, and the fix for the one way this collection rots on its own.\n\nOpenRouter withdraws free models constantly — three of the six ids written into this repo were gone within days — so a hard-coded modelId eventually starts returning 400 \"One of those models isn't available any more\" from POST /api/turns. Send this request and the script overwrites modelId, modelIdB and modelIdC with three free models that exist right now, each from a different author so the arena is not one provider against itself.\n\nRun it first if any Turns request fails on a model id. It writes to the active environment when there is one, so it does not get shadowed."
           },
           "response": []
         }

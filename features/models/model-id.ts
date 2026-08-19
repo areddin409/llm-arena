@@ -42,7 +42,11 @@ export type FreeModelId = z.infer<typeof freeModelIdSchema>;
  */
 export function modelAuthor(modelId: string): string {
   const [author = ""] = modelId.split("/");
-  return author.toLowerCase();
+  // OpenRouter prefixes its floating aliases with a tilde — `~openai/gpt-latest`
+  // is whatever `openai` currently calls latest. The author is still OpenAI, so
+  // the tilde is stripped; without this those eleven models drew a literal `~`
+  // as their provider mark, which names nobody.
+  return author.replace(/^~/, "").toLowerCase();
 }
 
 /** The one-letter stand-in shown when no provider mark is vendored. */
